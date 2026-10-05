@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: index-storage-${{ github.ref }}
+  group: index-storage-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -58,6 +58,9 @@ jobs:
           channel: stable
           cache: true
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
       - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
       - uses: gradle/actions/setup-gradle@v6
         with:
