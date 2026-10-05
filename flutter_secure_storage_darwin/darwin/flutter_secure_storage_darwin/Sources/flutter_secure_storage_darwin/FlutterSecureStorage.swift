@@ -554,22 +554,19 @@ class FlutterSecureStorage {
     /// Writes an item to the keychain. Updates if the key already exists.
     internal func write(params: KeychainQueryParameters, value: String) -> FlutterSecureStorageResponse {
         if !(params.useSecureEnclave ?? false) {
-            let keyExists = (containsKey(params: params).getOrElse(false))
             var query = baseQuery(from: params)
-
-            if keyExists {
-                let update: [CFString: Any] = [kSecValueData: value.data(using: .utf8) as Any]
-                let status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
-
-                if status == errSecSuccess {
-                    return FlutterSecureStorageResponse(status: status, value: nil)
-                } else {
-                    _ = delete(params: params)
+            let status = KeychainUpsert.write(
+                presence: containsKey(params: params),
+                failureStatus: { $0.status },
+                update: {
+                    let update: [CFString: Any] = [kSecValueData: value.data(using: .utf8) as Any]
+                    return SecItemUpdate(query as CFDictionary, update as CFDictionary)
+                },
+                add: {
+                    query[kSecValueData] = value.data(using: .utf8)
+                    return SecItemAdd(query as CFDictionary, nil)
                 }
-            }
-
-            query[kSecValueData] = value.data(using: .utf8)
-            let status = SecItemAdd(query as CFDictionary, nil)
+            )
             return FlutterSecureStorageResponse(status: status, value: nil)
         }
 

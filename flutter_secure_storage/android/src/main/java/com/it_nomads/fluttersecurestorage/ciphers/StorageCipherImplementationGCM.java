@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 import android.util.Base64;
 
 import com.it_nomads.fluttersecurestorage.FlutterSecureStorageConfig;
+import com.it_nomads.fluttersecurestorage.CheckedPreferences;
 
 import java.security.Key;
 import java.security.SecureRandom;
@@ -25,21 +26,25 @@ public class StorageCipherImplementationGCM implements StorageCipher {
     static final String WRAPPED_KEY_PREF = SHARED_PREFERENCES_KEY;
     static final String WRAPPED_KEY_ALGORITHM = KEY_ALGORITHM;
     private final String keyStoragePrefsName;
+    private final String rootSlot;
+    private final String legacySlot;
     private final Cipher cipher;
     private final SecureRandom secureRandom;
     private final Key secretKey;
 
     public StorageCipherImplementationGCM(Context context, KeyCipher rsaCipher, Cipher ignoredCipher, FlutterSecureStorageConfig config) throws Exception {
         keyStoragePrefsName = config.getEffectiveKeyStoragePrefsName();
+        rootSlot = config.rootSlot(SHARED_PREFERENCES_KEY);
+        legacySlot = config.rootSlot(LEGACY_V9_KEY);
         secureRandom = new SecureRandom();
 
         SharedPreferences preferences = context.getSharedPreferences(keyStoragePrefsName, Context.MODE_PRIVATE);
         SharedPreferences.Editor editor = preferences.edit();
 
-        String aesKey = preferences.getString(SHARED_PREFERENCES_KEY, null);
+        String aesKey = preferences.getString(rootSlot, null);
         boolean fromLegacyName = false;
         if (aesKey == null) {
-            aesKey = preferences.getString(LEGACY_V9_KEY, null);
+            aesKey = preferences.getString(legacySlot, null);
             fromLegacyName = aesKey != null;
         }
 
@@ -49,26 +54,32 @@ public class StorageCipherImplementationGCM implements StorageCipher {
             // Unwrap existing key - may throw BadPaddingException, InvalidKeyException if algorithm changed
             byte[] encrypted = Base64.decode(aesKey, Base64.DEFAULT);
             secretKey = rsaCipher.unwrap(encrypted, KEY_ALGORITHM);
-            if (fromLegacyName) {
-                editor.putString(SHARED_PREFERENCES_KEY, aesKey).apply();
+            if (fromLegacyName && config.mayCreateKeys()) {
+                CheckedPreferences.commit(preferences, editor.putString(rootSlot, aesKey));
             }
             return;
         }
 
         // No stored key - generate new one (first initialization)
+        if (!config.mayCreateKeys()) throw new IllegalStateException("Existing application key is unavailable");
         byte[] key = new byte[keySize];
         secureRandom.nextBytes(key);
         secretKey = new SecretKeySpec(key, KEY_ALGORITHM);
 
         byte[] encryptedKey = rsaCipher.wrap(secretKey);
-        editor.putString(SHARED_PREFERENCES_KEY, Base64.encodeToString(encryptedKey, Base64.DEFAULT));
-        editor.apply();
+        editor.putString(rootSlot, Base64.encodeToString(encryptedKey, Base64.DEFAULT));
+        CheckedPreferences.commit(preferences, editor);
     }
 
     @Override
     public void deleteKey(Context context) {
         SharedPreferences preferences = context.getSharedPreferences(keyStoragePrefsName, Context.MODE_PRIVATE);
-        preferences.edit().remove(SHARED_PREFERENCES_KEY).apply();
+        CheckedPreferences.commit(preferences, preferences.edit().remove(rootSlot));
+    }
+
+    @Override
+    public byte[] authenticateMigration(byte[] payload) throws Exception {
+        return MigrationAuthentication.sign(secretKey, payload);
     }
 
     protected Cipher getCipher() throws Exception {

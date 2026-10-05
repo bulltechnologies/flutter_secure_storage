@@ -6,6 +6,7 @@ import android.os.Build;
 
 import com.it_nomads.fluttersecurestorage.FlutterSecureStorageConfig;
 import com.it_nomads.fluttersecurestorage.NamespacedConfigSource;
+import com.it_nomads.fluttersecurestorage.CheckedPreferences;
 
 import javax.crypto.Cipher;
 
@@ -81,7 +82,9 @@ public class StorageCipherFactory {
 
     public StorageCipher getCurrentStorageCipher(Context context, Cipher cipher) throws Exception {
         final KeyCipher keyCipher = currentKeyAlgorithm.keyCipher.apply(context, config);
-        return createStorageCipher(context, keyCipher, cipher, currentStorageAlgorithm);
+        StorageCipher result = createStorageCipher(context, keyCipher, cipher, currentStorageAlgorithm);
+        if (config.mayCreateKeys()) certifyRootFamily(context);
+        return result;
     }
 
     /**
@@ -153,6 +156,62 @@ public class StorageCipherFactory {
         return currentKeyAlgorithm;
     }
 
+    public StorageCipherAlgorithm getSavedStorageAlgorithm() { return savedStorageAlgorithm; }
+    public StorageCipherAlgorithm getCurrentStorageAlgorithm() { return currentStorageAlgorithm; }
+
+    /** Explicit existing/target capabilities prevent a recovery read from
+     * creating or replacing a key and keep successor slots isolated. */
+    public StorageCipher forGeneration(Context context, KeyCipherAlgorithm keyAlgorithm,
+            StorageCipherAlgorithm storageAlgorithm, String generation, boolean mayCreate) throws Exception {
+        FlutterSecureStorageConfig generationConfig = config.forRootGeneration(generation, mayCreate);
+        KeyCipher keyCipher = keyAlgorithm.keyCipher.apply(context, generationConfig);
+        StorageCipher result;
+        if (storageAlgorithm == StorageCipherAlgorithm.AES_GCM_NoPadding) {
+            if (keyCipher instanceof KeyCipherImplementationAES23) {
+                throw new IllegalStateException("Ordinary migration cannot change authentication policy");
+            }
+            result = new StorageCipherImplementationGCM(context, keyCipher, null, generationConfig);
+        } else {
+            result = storageAlgorithm.storageCipher.apply(context, keyCipher, null, generationConfig);
+        }
+        if (mayCreate) {
+            // A previous failed commit may have left a generated slot in RAM.
+            // Certify the whole wrapping family even when the constructor loaded
+            // that slot rather than generating it on this retry.
+            certifyRootFamily(context);
+        }
+        return result;
+    }
+
+    private void certifyRootFamily(Context context) {
+        SharedPreferences roots = context.getSharedPreferences(config.getEffectiveKeyStoragePrefsName(), Context.MODE_PRIVATE);
+        CheckedPreferences.commit(roots, roots.edit());
+    }
+
+    public void retireGeneration(Context context, KeyCipherAlgorithm keyAlgorithm,
+            StorageCipherAlgorithm storageAlgorithm, String generation) throws Exception {
+        // Legacy global aliases/slots may be shared with another data family.
+        if (generation == null && !config.hasStorageNamespace()) return;
+        FlutterSecureStorageConfig source = config.forRootGeneration(generation, false);
+        if (keyAlgorithm == KeyCipherAlgorithm.AES_GCM_NoPadding) throw new IllegalStateException("Not an ordinary source");
+        String algorithmAlias = keyAlgorithm == KeyCipherAlgorithm.RSA_ECB_PKCS1Padding
+                ? ".FlutterSecureStoragePluginKey" : ".FlutterSecureStoragePluginKeyOAEP";
+        java.security.KeyStore store = java.security.KeyStore.getInstance("AndroidKeyStore");
+        store.load(null);
+        String alias = context.getPackageName() + algorithmAlias + source.getKeyAliasSuffix();
+        store.deleteEntry(alias);
+        if (store.containsAlias(alias)) throw new IllegalStateException("Source alias retirement was not verified");
+        SharedPreferences roots = context.getSharedPreferences(config.getEffectiveKeyStoragePrefsName(), Context.MODE_PRIVATE);
+        SharedPreferences.Editor remove = roots.edit();
+        if (storageAlgorithm == StorageCipherAlgorithm.AES_CBC_PKCS7Padding) {
+            remove.remove(source.rootSlot(StorageCipherImplementationAES18.WRAPPED_KEY_PREF));
+        } else {
+            remove.remove(source.rootSlot(StorageCipherImplementationGCM.WRAPPED_KEY_PREF))
+                    .remove(source.rootSlot(StorageCipherImplementationGCM.LEGACY_V9_KEY));
+        }
+        CheckedPreferences.commit(roots, remove);
+    }
+
     public void storeCurrentAlgorithms(SharedPreferences.Editor editor) {
         editor.putString(ELEMENT_PREFERENCES_ALGORITHM_KEY, currentKeyAlgorithm.name());
         editor.putString(ELEMENT_PREFERENCES_ALGORITHM_STORAGE, currentStorageAlgorithm.name());
@@ -178,10 +237,10 @@ public class StorageCipherFactory {
         if (key == null || storage == null) {
             return false;
         }
-        configSource.edit()
+        SharedPreferences.Editor adopted = configSource.edit()
                 .putString(ELEMENT_PREFERENCES_ALGORITHM_KEY, key)
-                .putString(ELEMENT_PREFERENCES_ALGORITHM_STORAGE, storage)
-                .apply();
+                .putString(ELEMENT_PREFERENCES_ALGORITHM_STORAGE, storage);
+        configSource.commit(adopted);
         return true;
     }
 }

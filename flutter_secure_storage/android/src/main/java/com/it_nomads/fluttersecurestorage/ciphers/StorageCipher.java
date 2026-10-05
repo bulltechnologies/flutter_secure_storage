@@ -8,4 +8,8 @@ public interface StorageCipher {
     byte[] decrypt(byte[] input) throws Exception;
 
     void deleteKey(Context context) throws Exception;
+
+    default byte[] authenticateMigration(byte[] payload) throws Exception {
+        throw new IllegalStateException("Cipher cannot authenticate ordinary migration metadata");
+    }
 }

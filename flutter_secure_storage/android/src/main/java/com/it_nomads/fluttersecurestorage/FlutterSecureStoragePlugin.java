@@ -170,9 +170,16 @@ public class FlutterSecureStoragePlugin implements MethodCallHandler, FlutterPlu
                 FlutterSecureStorageConfig config = new FlutterSecureStorageConfig(options);
                 FlutterSecureStorage secureStorage = getOrCreateStorage(config);
 
+                synchronized (MigrationArtifacts.familyLock(config.getEffectiveDataPrefsName())) {
+                final long dispatchEpoch = MigrationArtifacts.familyEpoch(config.getEffectiveDataPrefsName());
                 secureStorage.initialize(config, new SecurePreferencesCallback<>() {
                 @Override
                 public void onSuccess(Void unused) {
+                    synchronized (MigrationArtifacts.familyLock(config.getEffectiveDataPrefsName())) {
+                    if (dispatchEpoch != MigrationArtifacts.familyEpoch(config.getEffectiveDataPrefsName())) {
+                        handleException(new IllegalStateException("Storage family changed before dispatch"));
+                        return;
+                    }
                     try {
                         switch (call.method) {
                             case "write": {
@@ -247,6 +254,7 @@ public class FlutterSecureStoragePlugin implements MethodCallHandler, FlutterPlu
                             handleException(e);
                         }
                     }
+                    }
                 }
 
                 @Override
@@ -254,6 +262,7 @@ public class FlutterSecureStoragePlugin implements MethodCallHandler, FlutterPlu
                     handleException(e);
                 }
             });
+                }
             } catch (Exception e) {
                 handleException(e);
             }

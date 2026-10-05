@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 import android.util.Base64;
 
 import com.it_nomads.fluttersecurestorage.FlutterSecureStorageConfig;
+import com.it_nomads.fluttersecurestorage.CheckedPreferences;
 
 import java.util.Map;
 
@@ -40,7 +41,7 @@ public final class BiometricNamespaceKeyRecovery {
 
     /** The KeyCipher for the OLD location's Keystore key; its getCipher() needs authentication. */
     public static KeyCipher sourceKeyCipher(Context context, FlutterSecureStorageConfig config) throws Exception {
-        return KeyCipherAlgorithm.AES_GCM_NoPadding.keyCipher.apply(context, sourceConfig(config));
+        return KeyCipherAlgorithm.AES_GCM_NoPadding.keyCipher.apply(context, sourceConfig(config).forRootGeneration(null, false));
     }
 
     /** The KeyCipher for the NEW location's Keystore key; its getCipher() needs authentication. */
@@ -66,9 +67,8 @@ public final class BiometricNamespaceKeyRecovery {
         SharedPreferences prefs = context.getSharedPreferences(
                 config.getEffectiveKeyStoragePrefsName(), Context.MODE_PRIVATE);
         byte[] encrypted = authenticatedCipher.doFinal(appKey);
-        prefs.edit()
-                .putString(StorageCipherImplementationAES23.APP_KEY_PREF, Base64.encodeToString(encrypted, Base64.DEFAULT))
-                .apply();
+        CheckedPreferences.commit(prefs, prefs.edit()
+                .putString(StorageCipherImplementationAES23.APP_KEY_PREF, Base64.encodeToString(encrypted, Base64.DEFAULT)));
     }
 
     private static boolean hasAppKey(SharedPreferences prefs) {

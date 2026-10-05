@@ -63,6 +63,8 @@ public class FlutterSecureStorageConfig {
     private final String keyCipherAlgorithm;
     private final String storageCipherAlgorithm;
     private final Map<String, Object> rawOptions;
+    private String rootGeneration;
+    private boolean createKeys = true;
 
     public FlutterSecureStorageConfig(Map<String, Object> options) {
         this.rawOptions = new HashMap<>(options);
@@ -196,7 +198,29 @@ public class FlutterSecureStorageConfig {
      * otherwise returns "".
      */
     public String getKeyAliasSuffix() {
-        return storageNamespace != null ? "." + storageNamespace : "";
+        String namespaceSuffix = storageNamespace != null ? "." + storageNamespace : "";
+        return namespaceSuffix + (rootGeneration == null ? ""
+                : MigrationArtifacts.GENERATION_SUFFIX + rootGeneration);
+    }
+
+    public String rootSlot(String canonicalSlot) {
+        return canonicalSlot + (rootGeneration == null ? ""
+                : MigrationArtifacts.GENERATION_SUFFIX + rootGeneration);
+    }
+
+    public String getRootGeneration() { return rootGeneration; }
+    public boolean mayCreateKeys() { return createKeys; }
+
+    /** Native-only capability; platform options cannot supply a generation or
+     * authorize creation when probing an existing confidentiality root. */
+    public FlutterSecureStorageConfig forRootGeneration(String generation, boolean mayCreate) {
+        if (generation != null && !MigrationArtifacts.isGeneration(generation)) {
+            throw new IllegalArgumentException("Invalid root generation");
+        }
+        FlutterSecureStorageConfig copy = new FlutterSecureStorageConfig(rawOptions);
+        copy.rootGeneration = generation;
+        copy.createKeys = mayCreate;
+        return copy;
     }
 
     /** Returns a copy of this config with storageNamespace set to {@code namespace}. */

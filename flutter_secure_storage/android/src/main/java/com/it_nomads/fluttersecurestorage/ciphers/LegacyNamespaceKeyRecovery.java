@@ -6,6 +6,7 @@ import android.util.Base64;
 import android.util.Log;
 
 import com.it_nomads.fluttersecurestorage.FlutterSecureStorageConfig;
+import com.it_nomads.fluttersecurestorage.CheckedPreferences;
 
 import java.security.Key;
 import java.security.spec.AlgorithmParameterSpec;
@@ -127,7 +128,7 @@ public final class LegacyNamespaceKeyRecovery {
                                       String keyPrefix, KeyCipherProvider keyCiphers) {
         try {
             byte[] wrapped = Base64.decode(source.getString(sourceKeyPrefName, null), Base64.DEFAULT);
-            Key aesKey = keyCiphers.forConfig(sourceConfig)
+            Key aesKey = keyCiphers.forConfig(sourceConfig.forRootGeneration(null, false))
                     .unwrap(wrapped, StorageCipherImplementationGCM.WRAPPED_KEY_ALGORITHM);
             byte[] encodedAesKey = aesKey.getEncoded();
             if (encodedAesKey == null || encodedAesKey.length != AES_KEY_SIZE_BYTES) {
@@ -140,11 +141,10 @@ public final class LegacyNamespaceKeyRecovery {
                         + "likely a different instance's key under the same preference name");
             }
 
-            byte[] rewrapped = keyCiphers.forConfig(targetConfig).wrap(aesKey);
+            byte[] rewrapped = keyCiphers.forConfig(targetConfig.forRootGeneration(null, true)).wrap(aesKey);
 
-            target.edit()
-                    .putString(sourceKeyPrefName, Base64.encodeToString(rewrapped, Base64.DEFAULT))
-                    .apply();
+            CheckedPreferences.commit(target, target.edit()
+                    .putString(sourceKeyPrefName, Base64.encodeToString(rewrapped, Base64.DEFAULT)));
 
             Log.i(TAG, "Moved wrapped key for namespace '" + name + "'");
             return true;

@@ -66,8 +66,7 @@ public class MigrationBackup {
 
         // If status is "started", delete incomplete backup and start fresh
         if (STATUS_STARTED.equals(status)) {
-            Log.w(TAG, "Found incomplete backup (status: started), deleting and restarting");
-            deleteBackupData(dataSource, keyStorage, espSource, keyPrefix);
+            throw new IllegalStateException("Incomplete legacy backup must be preserved for recovery");
         }
 
         Log.i(TAG, "Starting backup creation (rename operation)...");
@@ -93,16 +92,10 @@ public class MigrationBackup {
                         espCount++;
                     }
                 }
-                if (!espEditor.commit()) {
-                    throw new RuntimeException("Failed to copy ESP data to backup");
-                }
+                CheckedPreferences.commit(espSource, espEditor);
                 Log.i(TAG, "Backed up " + espCount + " items in ESP");
             } catch (Exception espError) {
-                // ESP is corrupted and can't be read - skip ESP backup
-                // The migration will proceed with algorithm mismatch handling
-                Log.w(TAG, "ESP backup failed (ESP corrupted): " + espError.getMessage());
-                Log.w(TAG, "Skipping ESP backup - migration will use algorithm mismatch recovery");
-                espCount = 0;
+                throw new IllegalStateException("Encrypted source backup is unavailable", espError);
             }
         }
 
@@ -116,9 +109,7 @@ public class MigrationBackup {
                 dataCount++;
             }
         }
-        if (!dataEditor.commit()) {
-            throw new RuntimeException("Failed to copy encrypted data to backup");
-        }
+        CheckedPreferences.commit(dataSource, dataEditor);
 
         // Step 2: Copy wrapped AES keys to _BACKUP
         SharedPreferences.Editor keyEditor = keyStorage.edit();
@@ -130,9 +121,7 @@ public class MigrationBackup {
                 keyCount++;
             }
         }
-        if (!keyEditor.commit()) {
-            throw new RuntimeException("Failed to copy wrapped keys to backup");
-        }
+        CheckedPreferences.commit(keyStorage, keyEditor);
 
         // Step 3: Mark backup as complete (critical safety point)
         // Originals are kept - they will be deleted in step 7 after successful migration
@@ -179,7 +168,7 @@ public class MigrationBackup {
         deleteBackupData(dataSource, keyStorage, espSource, keyPrefix);
 
         // Remove backup status key entirely — migration is complete, no trace needed
-        configSource.edit().remove(BACKUP_STATUS_KEY).commit();
+        configSource.commit(configSource.edit().remove(BACKUP_STATUS_KEY));
 
         Log.d(TAG, "Backup deleted and status key removed");
     }
@@ -199,9 +188,7 @@ public class MigrationBackup {
             return;  // Don't write backup status if backup disabled
         }
 
-        configSource.edit()
-            .putString(BACKUP_STATUS_KEY, status)
-            .commit();
+        configSource.commit(configSource.edit().putString(BACKUP_STATUS_KEY, status));
     }
 
     /**
@@ -251,7 +238,7 @@ public class MigrationBackup {
                     espCount++;
                 }
             }
-            espEditor.commit();
+            CheckedPreferences.commit(espSource, espEditor);
         }
 
         // Delete _BACKUP keys from dataSource
@@ -263,7 +250,7 @@ public class MigrationBackup {
                 dataCount++;
             }
         }
-        dataEditor.commit();
+        CheckedPreferences.commit(dataSource, dataEditor);
 
         // Delete _BACKUP keys from keyStorage
         SharedPreferences.Editor keyEditor = keyStorage.edit();
@@ -274,7 +261,7 @@ public class MigrationBackup {
                 keyCount++;
             }
         }
-        keyEditor.commit();
+        CheckedPreferences.commit(keyStorage, keyEditor);
 
         if (dataCount > 0 || keyCount > 0 || espCount > 0) {
             Log.d(TAG, "Deleted " + dataCount + " data _BACKUP entries, " + keyCount + " key _BACKUP entries, " + espCount + " ESP _BACKUP entries");
@@ -330,7 +317,7 @@ public class MigrationBackup {
                 dataCount++;
             }
         }
-        dataEditor.commit();
+        CheckedPreferences.commit(dataSource, dataEditor);
 
         // Delete original keys from keyStorage — but only if no _MIGRATED markers exist.
         // If _MIGRATED markers exist, step 5 already ran in a prior crashed run and wrote the new
@@ -346,7 +333,7 @@ public class MigrationBackup {
                     keyCount++;
                 }
             }
-            keyEditor.commit();
+            CheckedPreferences.commit(keyStorage, keyEditor);
         } else {
             // _MIGRATED markers exist — step 5 already ran in a prior crashed run and wrote the
             // new wrapped AES key to keyStorage. Must be preserved.
@@ -395,7 +382,7 @@ public class MigrationBackup {
                 count++;
             }
         }
-        editor.commit();
+        configSource.commit(editor);
         if (count > 0) {
             Log.d(TAG, "Deleted " + count + " _MIGRATED marker entries from configSource");
         }
