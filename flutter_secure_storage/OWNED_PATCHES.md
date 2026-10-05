@@ -1,9 +1,14 @@
 # Index owned secure storage (Android and Dart entry point)
 
-Vendored from `flutter_secure_storage` 10.3.4 as resolved by the app's lockfile,
+The public fork merges upstream `flutter_secure_storage` 11.2.0 while retaining
+the existing owned persistence protocol. See [INDEX_FORK.md](../INDEX_FORK.md)
+for the upgrade, compatibility differences and consumer pins.
+
+The original owned patches were vendored from `flutter_secure_storage` 10.3.4,
 archive SHA-256
 `fe638107c5f69119156ada2db5a57734385fac3f64430bd7252a00d3ead2ca4b`.
-Upstream licenses, package identity and public Dart API are retained. Apple
+Upstream licenses and package identity are retained; the 11.2.0 Dart API includes
+the retained legacy options required by existing hosts. Apple
 native corrections live in the separately owned `flutter_secure_storage_darwin`
 package. Select both packages in the host's dependency graph.
 

@@ -222,6 +222,10 @@ public class StorageCipherFactory {
         return configSource.getString(ELEMENT_PREFERENCES_ALGORITHM_KEY, null);
     }
 
+    public static String readSavedStorageAlgorithm(NamespacedConfigSource configSource) {
+        return configSource.getString(ELEMENT_PREFERENCES_ALGORITHM_STORAGE, null);
+    }
+
     /**
      * Copies algorithm markers from the data prefs, where v9 stored them, into
      * the config source, where v10+ looks. No-op if the config source already

@@ -1,0 +1,16 @@
+plugins {
+    id 'com.android.library' version '9.1.1' apply false
+}
+
+def flutterSdk = providers.environmentVariable('FLUTTER_ROOT')
+        .orElse(providers.gradleProperty('flutter.sdk')).get()
+def testCompileSdk = providers.gradleProperty('testCompileSdk').orElse('36').get().toInteger()
+
+subprojects {
+    ext.flutter = [compileSdkVersion: testCompileSdk]
+    afterEvaluate {
+        dependencies {
+            compileOnly files("$flutterSdk/bin/cache/artifacts/engine/android-arm64/flutter.jar")
+        }
+    }
+}

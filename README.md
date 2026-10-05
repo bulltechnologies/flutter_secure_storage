@@ -1,8 +1,14 @@
 # flutter_secure_storage
 
+[![Index Storage](https://github.com/bulltechnologies/flutter_secure_storage/actions/workflows/index-storage.yml/badge.svg)](https://github.com/bulltechnologies/flutter_secure_storage/actions/workflows/index-storage.yml)
+
+This is the public Index-maintained fork. Start with [INDEX_FORK.md](INDEX_FORK.md)
+for its upstream baseline, retained compatibility, immutable dependency pins,
+verification commands, and maintenance policy. The documentation below is
+retained from upstream.
+
 [![Pub Version](https://img.shields.io/pub/v/flutter_secure_storage.svg)](https://pub.dev/packages/flutter_secure_storage)
-[![Pub Version Prerelease](https://img.shields.io/pub/v/flutter_secure_storage.svg?include_prereleases)](https://pub.dev/packages/flutter_secure_storage)
-[![Build Status](https://github.com/mogol/flutter_secure_storage/actions/workflows/code-quality.yml/badge.svg)](https://github.com/juliansteenbakker/flutter_secure_storage/actions/workflows/code-quality.yml)
+[![Build Status](https://github.com/juliansteenbakker/flutter_secure_storage/actions/workflows/ci.yml/badge.svg)](https://github.com/juliansteenbakker/flutter_secure_storage/actions/workflows/ci.yml)
 [![Code Quality: Very Good Analysis](https://img.shields.io/badge/style-very_good_analysis-B22C89.svg)](https://pub.dev/packages/very_good_analysis)
 [![Codecov](https://codecov.io/gh/juliansteenbakker/flutter_secure_storage/graph/badge.svg?token=UUVTJ6MS4A)](https://codecov.io/gh/juliansteenbakker/flutter_secure_storage)
 [![GitHub Sponsors](https://img.shields.io/github/sponsors/juliansteenbakker)](https://github.com/sponsors/juliansteenbakker)
@@ -314,6 +320,22 @@ If you have set your application up to use App Groups then you will need to add 
 ```
 
 If you are configuring this value through XCode then the string you set in the Keychain Sharing section would simply read "aoeu" with XCode appending the `$(AppIdentifierPrefix)` when it saves the configuration.
+
+#### macOS: Keychain Sharing requires provisioning
+
+Adding `keychain-access-groups` enables Keychain Sharing, which requires a provisioning profile. On a free (non-Program) Apple Developer account, Xcode responds by embedding a machine-specific development provisioning profile, so the built app will only launch on the Mac that built it, and can't be distributed to other Macs (for example as a signed `.app`/`.dmg` outside the App Store).
+
+If your app doesn't actually need Keychain Sharing (no App Group, no sharing items with another app of yours), you can avoid the entitlement entirely by disabling the data protection keychain on macOS instead:
+
+```dart
+final storage = Platform.isMacOS
+    ? const FlutterSecureStorage(
+        mOptions: MacOsOptions(usesDataProtectionKeychain: false),
+      )
+    : const FlutterSecureStorage();
+```
+
+This falls back to the legacy (non-data-protection) Keychain, which doesn't require `keychain-access-groups` or a provisioning profile.
 
 #### Troubleshooting: Key lookup returns null after hot restart on iOS
 

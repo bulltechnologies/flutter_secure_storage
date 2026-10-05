@@ -34,16 +34,15 @@ class WindowsOptions extends Options {
 
   @override
   Map<String, String> toMap() => <String, String>{
-        'useBackwardCompatibility': _useBackwardCompatibility.toString(),
-      };
+    'useBackwardCompatibility': _useBackwardCompatibility.toString(),
+  };
 
   /// Creates a new instance of `WindowsOptions` by copying the current instance
   /// and replacing specified properties with new values.
   WindowsOptions copyWith({
     bool? useBackwardCompatibility,
-  }) =>
-      WindowsOptions(
-        useBackwardCompatibility:
-            useBackwardCompatibility ?? _useBackwardCompatibility,
-      );
+  }) => WindowsOptions(
+    useBackwardCompatibility:
+        useBackwardCompatibility ?? _useBackwardCompatibility,
+  );
 }

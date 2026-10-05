@@ -39,7 +39,8 @@ public class FlutterSecureStoragePlugin implements MethodCallHandler, FlutterPlu
 
             channel = new MethodChannel(messenger, "plugins.it_nomads.com/flutter_secure_storage");
             channel.setMethodCallHandler(this);
-        } catch (Exception e) {
+        } catch (Throwable e) {
+            if (e instanceof VirtualMachineError) throw (VirtualMachineError) e;
             Log.e(TAG, "Registration failed", e);
         }
     }
@@ -87,9 +88,10 @@ public class FlutterSecureStoragePlugin implements MethodCallHandler, FlutterPlu
     private FlutterSecureStorage getOrCreateStorage(FlutterSecureStorageConfig config) {
         // Use "ns:" prefix for storageNamespace to avoid collisions with legacy
         // sharedPreferencesName keys in the map.
-        final String name = config.hasStorageNamespace()
+        final String namespace = config.hasStorageNamespace()
                 ? "ns:" + config.getStorageNamespace()
                 : config.getSharedPreferencesName();
+        final String name = namespace + "|" + config.getSharedPreferencesKeyPrefix();
         synchronized (storagesBySharedPreferencesName) {
             FlutterSecureStorage existing = storagesBySharedPreferencesName.get(name);
             if (existing != null) {
@@ -168,6 +170,12 @@ public class FlutterSecureStoragePlugin implements MethodCallHandler, FlutterPlu
                     options = new HashMap<>();
                 }
                 FlutterSecureStorageConfig config = new FlutterSecureStorageConfig(options);
+                if ("checkUpgradeStatus".equals(call.method)) {
+                    synchronized (MigrationArtifacts.familyLock(config.getEffectiveDataPrefsName())) {
+                        result.success(UpgradeInspector.inspect(applicationContext, config));
+                    }
+                    return;
+                }
                 FlutterSecureStorage secureStorage = getOrCreateStorage(config);
 
                 synchronized (MigrationArtifacts.familyLock(config.getEffectiveDataPrefsName())) {
@@ -187,8 +195,17 @@ public class FlutterSecureStoragePlugin implements MethodCallHandler, FlutterPlu
                                 String value = getValueFromCall(call);
 
                                 if (value != null) {
-                                    secureStorage.write(key, value);
-                                    result.success(null);
+                                    secureStorage.write(key, value, new SecurePreferencesCallback<>() {
+                                        @Override
+                                        public void onSuccess(Void unused) {
+                                            result.success(null);
+                                        }
+
+                                        @Override
+                                        public void onError(Exception e) {
+                                            handleException(e);
+                                        }
+                                    });
                                 } else {
                                     result.error("null", null, null);
                                 }
@@ -198,15 +215,34 @@ public class FlutterSecureStoragePlugin implements MethodCallHandler, FlutterPlu
                                 String key = getKeyFromCall(secureStorage, call);
 
                                 if (secureStorage.containsKey(key)) {
-                                    String value = secureStorage.read(key);
-                                    result.success(value);
+                                    secureStorage.read(key, new SecurePreferencesCallback<>() {
+                                        @Override
+                                        public void onSuccess(String value) {
+                                            result.success(value);
+                                        }
+
+                                        @Override
+                                        public void onError(Exception e) {
+                                            handleException(e);
+                                        }
+                                    });
                                 } else {
                                     result.success(null);
                                 }
                                 break;
                             }
                             case "readAll": {
-                                result.success(secureStorage.readAll());
+                                secureStorage.readAll(new SecurePreferencesCallback<>() {
+                                    @Override
+                                    public void onSuccess(Map<String, String> value) {
+                                        result.success(value);
+                                    }
+
+                                    @Override
+                                    public void onError(Exception e) {
+                                        handleException(e);
+                                    }
+                                });
                                 break;
                             }
                             case "containsKey": {
@@ -242,12 +278,13 @@ public class FlutterSecureStoragePlugin implements MethodCallHandler, FlutterPlu
                                 result.notImplemented();
                                 break;
                         }
-                    } catch (Exception e) {
+                    } catch (Throwable e) {
+                        if (e instanceof VirtualMachineError) throw (VirtualMachineError) e;
                         if (config.shouldDeleteOnFailure()) {
                             try {
                                 secureStorage.deleteAll();
                                 result.success("Data has been reset");
-                            } catch (Exception ex) {
+                            } catch (Throwable ex) {
                                 handleException(ex);
                             }
                         } else {
@@ -263,13 +300,14 @@ public class FlutterSecureStoragePlugin implements MethodCallHandler, FlutterPlu
                 }
             });
                 }
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 handleException(e);
             }
         }
 
 
-        private void handleException(Exception e) {
+        private void handleException(Throwable e) {
+            if (e instanceof VirtualMachineError) throw (VirtualMachineError) e;
             StringWriter stringWriter = new StringWriter();
             e.printStackTrace(new PrintWriter(stringWriter));
             // Send exception message as the message field so Flutter can parse it

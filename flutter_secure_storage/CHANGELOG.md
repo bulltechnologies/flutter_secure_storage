@@ -1,27 +1,81 @@
-## 10.3.4
+# Changelog
+
+## 11.2.0+index.1
+
+- Merge upstream 11.2.0, retaining the Index ordinary migration and persistence protocol.
+- Keep legacy readers and identity/backend options needed by existing stores;
+  the stock 11.0.0 removal notes below do not apply to those fork compatibility paths.
+- Include the 11.x asynchronous API and biometric options with owned family guards.
+- Consume Darwin 0.4.3 with in-place update-query correction and item preservation.
+- Add independent fork CI and compatibility/recovery regression tests.
+
+## [11.2.0](https://github.com/juliansteenbakker/flutter_secure_storage/compare/flutter_secure_storage-v11.1.1...flutter_secure_storage-v11.2.0) (2026-09-16)
+
+
+### Features
+
+* **android:** requireBiometricsPerOperation flag ([#1264](https://github.com/juliansteenbakker/flutter_secure_storage/issues/1264)) ([321cf97](https://github.com/juliansteenbakker/flutter_secure_storage/commit/321cf97c72e78ddb81e888484560ebca74414614))
+
+
+### Bug Fixes
+
+* **android:** don't hang when biometric negative button is tapped ([#1267](https://github.com/juliansteenbakker/flutter_secure_storage/issues/1267)) ([405c6e6](https://github.com/juliansteenbakker/flutter_secure_storage/commit/405c6e6299c665dfb8a7211192b42319da2e88bc))
+* **android:** fix fresh biometric install crash on non-namespaced stores ([120bdf4](https://github.com/juliansteenbakker/flutter_secure_storage/commit/120bdf4ddb75e94d0c7d40519e2da9cea953a2c1))
+* **android:** port the shared-key multi-instance fixes to v11.x ([6cc9ddc](https://github.com/juliansteenbakker/flutter_secure_storage/commit/6cc9ddc55df42255edd4afb72bac56458997885d))
+* **android:** recover biometric-protected storage on post-auth cipher failure ([#1271](https://github.com/juliansteenbakker/flutter_secure_storage/issues/1271)) ([77eed59](https://github.com/juliansteenbakker/flutter_secure_storage/commit/77eed597eaa244106b946cd02c4d7edb3eb9fa05))
+* **android:** recover the biometric app key on a namespace switch ([31f6eeb](https://github.com/juliansteenbakker/flutter_secure_storage/commit/31f6eeb79ad8187a49d8675bbf58d81b050f506f))
+* **android:** scope deleteAll to the key prefix instead of clearing the file ([#1266](https://github.com/juliansteenbakker/flutter_secure_storage/issues/1266)) ([34170b2](https://github.com/juliansteenbakker/flutter_secure_storage/commit/34170b2caf52c642efa5b6584fa4cc5072f6c697))
+* **darwin:** find keychain items across accessibility levels ([#1269](https://github.com/juliansteenbakker/flutter_secure_storage/issues/1269)) ([9ae0e42](https://github.com/juliansteenbakker/flutter_secure_storage/commit/9ae0e422d6ad6376ddf7960186d42342b0370baf))
+* don't report pending namespace recovery as data loss in checkUpgradeStatus ([f795d52](https://github.com/juliansteenbakker/flutter_secure_storage/commit/f795d52488450d6ef04ee580c895d98c59b737f3))
+
+## [11.1.1](https://github.com/juliansteenbakker/flutter_secure_storage/compare/flutter_secure_storage-v11.1.0...flutter_secure_storage-v11.1.1) (2026-09-11)
+
+
+### Bug Fixes
+
+* **android:** read saved key-cipher marker instead of toString() on a KeyCipher ([#1256](https://github.com/juliansteenbakker/flutter_secure_storage/issues/1256)) ([73f0ef5](https://github.com/juliansteenbakker/flutter_secure_storage/commit/73f0ef5b0666a25912ae07694211414dfcabcf23))
+
+## [11.1.0](https://github.com/juliansteenbakker/flutter_secure_storage/compare/flutter_secure_storage-v11.0.0...flutter_secure_storage-v11.1.0) (2026-09-10)
+
+
+### Features
+
+* add checkUpgradeStatus() to report data lost on a direct major upgrade ([#1243](https://github.com/juliansteenbakker/flutter_secure_storage/issues/1243)) ([fc716ea](https://github.com/juliansteenbakker/flutter_secure_storage/commit/fc716ea7b3973db985d953776107b44b5984f591))
+
+
+### Bug Fixes
+
+* **android:** move wrapped key when switching between sharedPreferencesName and storageNamespace ([2482e34](https://github.com/juliansteenbakker/flutter_secure_storage/commit/2482e34e377cae7e6e082c0c0c867c2d5857a531))
+* **android:** use flutter.compileSdkVersion (36) instead of pinning compileSdk (37) ([#1236](https://github.com/juliansteenbakker/flutter_secure_storage/issues/1236)) ([0530fe7](https://github.com/juliansteenbakker/flutter_secure_storage/commit/0530fe74174743b234adc14c5305d13cbdac7764)), closes [#1224](https://github.com/juliansteenbakker/flutter_secure_storage/issues/1224)
+* require flutter_secure_storage_platform_interface ^2.1.0 for checkUpgradeStatus ([#1247](https://github.com/juliansteenbakker/flutter_secure_storage/issues/1247)) ([0d3d6f2](https://github.com/juliansteenbakker/flutter_secure_storage/commit/0d3d6f21201cb844ef085b2cb0a3999e45f125e1))
+
+## [11.0.0](https://github.com/juliansteenbakker/flutter_secure_storage/compare/flutter_secure_storage-v10.3.1...flutter_secure_storage-v11.0.0) (2026-08-06)
+
+**Breaking changes**
+
+items deprecated in v10 have been removed.
+Any data saved using deprecated algorithms or features will be unusable after this upgrade. If you used a version prior to v10, upgrade to v10 first so existing data is migrated.
 
 ### Android
-- Fixed data loss when switching between `sharedPreferencesName` and `storageNamespace` with the same name after upgrading directly from v9.2.4 (skipping v10.0 to v10.2).
-- Fixed the same namespace switch losing data for `AndroidOptions.biometric()` stores.
-- Fixed a race where one `FlutterSecureStorage` instance completing an algorithm migration could delete a legacy key that a sibling, non-namespaced instance was still relying on.
-- Fixed namespace-switch recovery occasionally relocating the wrong key when multiple non-namespaced instances shared the same legacy key storage file.
-- Fixed a crash (and subsequent data wipe) on the very first launch of a fresh `AndroidOptions.biometric()` store on a non-namespaced instance.
-- Fixed a fresh install with two non-namespaced instances, one using `AndroidOptions.biometric()` and one not, permanently losing the biometric instance's data.
 
-## 10.3.3
+- Removed `KeyCipherAlgorithm.RSA_ECB_PKCS1Padding`. Upgrade to v10 first so existing data is migrated to `RSA_ECB_OAEPwithSHA_256andMGF1Padding` before upgrading to v11.
+- Removed `StorageCipherAlgorithm.AES_CBC_PKCS7Padding`. Upgrade to v10 first so existing data is migrated to `AES_GCM_NoPadding` before upgrading to v11.
+- Removed `encryptedSharedPreferences` parameter from `AndroidOptions` and `AndroidOptions.biometric`. The Jetpack Security (EncryptedSharedPreferences) backend is no longer supported; any remaining data was automatically migrated to custom cipher storage in v10.
+- Removed `sharedPreferencesName` from `AndroidOptions`. Use `storageNamespace` instead for full namespace isolation.
+- Raised `minSdk` to 24 and `compileSdk` to 37. Flutter 3.35 raised its own Android minimum to API 24, making API 23 support unverifiable with any supported Flutter version. The legacy AES-CBC cipher path that supported API 21-22 has been removed.
 
-### Android
-- Read saved key-cipher marker instead of toString() on a KeyCipher
+### Features
 
-## 10.3.2
+* **android:** add requireBiometricConfirmation option to AndroidOptions ([7f5f7de](https://github.com/juliansteenbakker/flutter_secure_storage/commit/7f5f7de0ea98a6482c02e768faf7c82c2e5b959b))
 
-### Android
-- Fixed data loss when switching between `sharedPreferencesName` and `storageNamespace` with the same name; the wrapped key is now moved to the new location instead of the store starting empty.
-- Fixed v9 data with a non-default `keyCipherAlgorithm`/`storageCipherAlgorithm` being discarded on upgrade: its algorithm markers were stored where v10 doesn't look, so a failed migration deleted it. Markers are now read from the v9 location, and unmarked data that still decrypts with the current cipher is left alone.
-- Fixed AES-GCM data from v9 becoming unreadable: v9's wrapped-key preference name had a typo that v10 corrected, and is now read as a fallback.
-- Fixed `migrateWithBackup` ignoring `storageNamespace` and backing up the wrong key storage file.
-- Fixed a migration running on a fresh install, which could fail on some devices' KeyStore.
-- Fixed a `NullPointerException` when a storage call ran after the Flutter engine detached; it now throws a catchable `INIT_FAILED` `PlatformException`.
+
+### Bug Fixes
+
+* **android:** catch Throwable on worker thread so keystore Errors don't crash the app ([d5802ff](https://github.com/juliansteenbakker/flutter_secure_storage/commit/d5802ff6b422a391501145d1113ca9da4c39f1f0))
+* **android:** don't swallow VM errors, catch Throwable on biometric thread too ([d413d3f](https://github.com/juliansteenbakker/flutter_secure_storage/commit/d413d3fb2e8c0faaf78f986be9300e5f1ca6105c))
+* **linux:** handle missing default keyring ([b39c7c1](https://github.com/juliansteenbakker/flutter_secure_storage/commit/b39c7c1db6c1fe651367031c9d0033d590784de0))
+* **linux:** fail closed on orphaned keyring data ([2e720ff](https://github.com/juliansteenbakker/flutter_secure_storage/commit/2e720ff7e6b956a5d1197a5077bb8be39a5d5632))
+* remove redundant ./ prefix from part directives ([cc7018d](https://github.com/juliansteenbakker/flutter_secure_storage/commit/cc7018d15eae56b389348d73f788ae1a03c606c6))
 
 ## 10.3.1
 
@@ -51,7 +105,6 @@
 - Fixed non-UTF-8 error messages from libsecret causing a `FormatException` on the Dart side; messages are now sanitised before being sent through the method channel.
 - Fixed locked or unavailable keyring now surfacing as a catchable `PlatformException` with code `KeyringLocked`.
 - Fixed JSON parse errors and other C++ exceptions now surfacing as a `PlatformException` with code `StorageError` instead of sending malformed bytes through the channel.
-
 ## 10.2.0
 
 ### Android
@@ -67,6 +120,9 @@
   If you are on Dart >=3.10.0, this fix is applied automatically. Otherwise, pin `flutter_secure_storage_windows: ^4.2.0` in your `pubspec.yaml` to opt in and make sure your constraint is set for minimum of Dart >=3.10.0.
 
 ## 10.1.0
+
+### Windows
+- Updated `flutter_secure_storage_windows` to 4.2.0 with compatibility fixes for `win32` 6.0.0.
 
 ### Android
 - Added `storageNamespace` option to `AndroidOptions` for full namespace isolation across storage instances (SharedPreferences, KeyStore aliases, config/key storage). Use this instead of `sharedPreferencesName` when running multiple `FlutterSecureStorage` instances with different cipher configurations.

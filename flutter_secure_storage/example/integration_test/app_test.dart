@@ -1,7 +1,3 @@
-// Some tests intentionally construct AndroidOptions with deprecated cipher
-// algorithms to verify migration paths from legacy to current defaults.
-// ignore_for_file: deprecated_member_use
-
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
@@ -17,7 +13,7 @@ void main() {
     testWidgets(
       'Android: deleteAll() must not clear other '
       'sharedPreferencesName namespace (regression #1023)',
-      (WidgetTester tester) async {
+      (tester) async {
         // This is a plugin-level regression test for:
         // https://github.com/juliansteenbakker/flutter_secure_storage/issues/1023
         //
@@ -63,7 +59,7 @@ void main() {
     testWidgets(
       'Android: namespaces with different cipher algorithms must not interfere '
       '(full storageNamespace isolation)',
-      (WidgetTester tester) async {
+      (tester) async {
         // This test verifies that storageNamespace provides full isolation:
         // data prefs, config markers, KeyStore aliases, and key storage.
         // Different namespaces can safely use different cipher algorithms
@@ -71,12 +67,11 @@ void main() {
         final pageObject = await _setupHomePage(tester);
         await pageObject.deleteAll();
 
-        // Use different algorithms per namespace to test full isolation
+        // Use different key cipher algorithms per namespace to test isolation
         const storageA = FlutterSecureStorage(
           aOptions: AndroidOptions(
             storageNamespace: 'namespace_alg_a',
-            keyCipherAlgorithm: KeyCipherAlgorithm.RSA_ECB_PKCS1Padding,
-            storageCipherAlgorithm: StorageCipherAlgorithm.AES_CBC_PKCS7Padding,
+            keyCipherAlgorithm: KeyCipherAlgorithm.AES_GCM_NoPadding,
           ),
         );
         // storageB uses default algorithms (OAEP/GCM) — distinct from storageA
@@ -131,39 +126,38 @@ void main() {
       skip: !Platform.isAndroid,
     );
 
-    testWidgets('Add a Random Row', (WidgetTester tester) async {
+    testWidgets('Add a Random Row', (tester) async {
       final pageObject = await _setupHomePage(tester);
       await pageObject.addRandomRow();
       pageObject.verifyRowExists(0);
     });
 
-    testWidgets('Edit a Row Value', (WidgetTester tester) async {
+    testWidgets('Edit a Row Value', (tester) async {
       final pageObject = await _setupHomePage(tester);
       await pageObject.addRandomRow();
       await pageObject.editValue('Updated Row', 0);
       pageObject.verifyValue('Updated Row', 0);
     });
 
-    testWidgets('Delete a Row', (WidgetTester tester) async {
+    testWidgets('Delete a Row', (tester) async {
       final pageObject = await _setupHomePage(tester);
       await pageObject.addRandomRow();
       await pageObject.deleteRow(0);
       pageObject.verifyRowDoesNotExist(0);
     });
 
-    testWidgets('Check Protected Data Availability',
-        (WidgetTester tester) async {
+    testWidgets('Check Protected Data Availability', (tester) async {
       final pageObject = await _setupHomePage(tester);
       await pageObject.checkProtectedDataAvailability();
     });
 
-    testWidgets('Contains Key for a Row', (WidgetTester tester) async {
+    testWidgets('Contains Key for a Row', (tester) async {
       final pageObject = await _setupHomePage(tester);
       await pageObject.addRandomRow();
       await pageObject.containsKeyForRow(0, expectedResult: true);
     });
 
-    testWidgets('Read Value for a Row', (WidgetTester tester) async {
+    testWidgets('Read Value for a Row', (tester) async {
       final pageObject = await _setupHomePage(tester);
       await pageObject.addRandomRow();
       await pageObject.editValue('Read Test', 0); // Ensure there's a value
@@ -173,7 +167,7 @@ void main() {
       );
     });
 
-    testWidgets('Add Multiple Rows and Verify', (WidgetTester tester) async {
+    testWidgets('Add Multiple Rows and Verify', (tester) async {
       final pageObject = await _setupHomePage(tester);
       await pageObject.addRandomRow();
       await pageObject.addRandomRow();
@@ -182,7 +176,7 @@ void main() {
         ..verifyRowExists(1);
     });
 
-    testWidgets('Edit Multiple Rows', (WidgetTester tester) async {
+    testWidgets('Edit Multiple Rows', (tester) async {
       final pageObject = await _setupHomePage(tester);
       await pageObject.addRandomRow();
       await pageObject.addRandomRow();
@@ -193,7 +187,7 @@ void main() {
         ..verifyValue('Second Row', 1);
     });
 
-    testWidgets('Delete All Rows', (WidgetTester tester) async {
+    testWidgets('Delete All Rows', (tester) async {
       final pageObject = await _setupHomePage(tester);
       await pageObject.addRandomRow();
       await pageObject.addRandomRow();
@@ -206,13 +200,12 @@ void main() {
     testWidgets('Enclave requested on iOS Simulator falls back gracefully',
         skip: !(Platform.isIOS &&
             Platform.environment.containsKey('SIMULATOR_DEVICE_NAME')),
-        (WidgetTester tester) async {
+        (tester) async {
       const storage = FlutterSecureStorage();
       const key = 'it_enclave_sim_fallback_key';
       const value = 'sim_fallback_secret';
 
       // Write with enclave requested
-      // ignore: undefined_named_parameter
       await storage.write(
         key: key,
         value: value,
@@ -220,7 +213,6 @@ void main() {
       );
 
       // Read should succeed due to fallback
-      // ignore: undefined_named_parameter
       final readBack = await storage.read(
         key: key,
         iOptions: const IOSOptions(useSecureEnclave: true),
@@ -228,7 +220,6 @@ void main() {
       expect(readBack, value);
 
       // Delete should also succeed
-      // ignore: undefined_named_parameter
       await storage.delete(
         key: key,
         iOptions: const IOSOptions(useSecureEnclave: true),
@@ -244,7 +235,7 @@ void main() {
         'iOS device: baseline (useSecureEnclave=false) write/read/delete',
         skip: !(Platform.isIOS &&
             !Platform.environment.containsKey('SIMULATOR_DEVICE_NAME')),
-        (WidgetTester tester) async {
+        (tester) async {
       const storage = FlutterSecureStorage();
       const key = 'it_enclave_device_baseline_key';
       const value = 'device_baseline_secret';
@@ -273,10 +264,59 @@ void main() {
     });
 
     testWidgets(
+        'iOS: read/write finds an item after IOSOptions.accessibility '
+        'changes to a different level',
+        skip: !Platform.isIOS, (tester) async {
+      const storage = FlutterSecureStorage();
+      const key = 'it_cross_accessibility_key';
+      const firstUnlockOptions = IOSOptions(
+        accessibility: KeychainAccessibility.first_unlock,
+      );
+
+      // Clean up any leftovers from a previous failed run, under either level.
+      await storage.delete(key: key);
+      await storage.delete(key: key, iOptions: firstUnlockOptions);
+
+      // Write under the default accessibility level (unlocked).
+      await storage.write(key: key, value: 'written_under_unlocked');
+
+      // A read under a different level must still find the item:
+      // kSecAttrAccessible filters the search, but keychain uniqueness on
+      // account+service ignores it.
+      final containsUnderOtherLevel = await storage.containsKey(
+        key: key,
+        iOptions: firstUnlockOptions,
+      );
+      expect(containsUnderOtherLevel, isTrue);
+
+      final readUnderOtherLevel = await storage.read(
+        key: key,
+        iOptions: firstUnlockOptions,
+      );
+      expect(readUnderOtherLevel, 'written_under_unlocked');
+
+      // A write under the new level must migrate the item rather than throw
+      // errSecDuplicateItem.
+      await storage.write(
+        key: key,
+        value: 'written_under_first_unlock',
+        iOptions: firstUnlockOptions,
+      );
+      final readAfterMigration = await storage.read(
+        key: key,
+        iOptions: firstUnlockOptions,
+      );
+      expect(readAfterMigration, 'written_under_first_unlock');
+
+      // Cleanup
+      await storage.delete(key: key, iOptions: firstUnlockOptions);
+    });
+
+    testWidgets(
         'iOS device: useSecureEnclave=true with non-prompting access control (applicationPassword) write/read/delete',
         skip: !(Platform.isIOS &&
             !Platform.environment.containsKey('SIMULATOR_DEVICE_NAME')),
-        (WidgetTester tester) async {
+        (tester) async {
       const storage = FlutterSecureStorage();
       const key = 'it_enclave_device_enabled_key';
       const value = 'device_enclave_secret';
@@ -285,7 +325,6 @@ void main() {
         key: key,
         value: value,
         // Use a non-prompting flag to make test automation stable.
-        // ignore: undefined_named_parameter
         iOptions: const IOSOptions(
           useSecureEnclave: true,
           accessControlFlags: [AccessControlFlag.applicationPassword],
@@ -324,7 +363,7 @@ void main() {
     testWidgets('iOS device: readAll with Secure Enclave items',
         skip: !(Platform.isIOS &&
             !Platform.environment.containsKey('SIMULATOR_DEVICE_NAME')),
-        (WidgetTester tester) async {
+        (tester) async {
       const storage = FlutterSecureStorage();
       // Use default userPresence (no applicationPassword) - should work with
       // device passcode
@@ -372,7 +411,7 @@ void main() {
         'iOS device: readAll with mixed Secure Enclave and standard items',
         skip: !(Platform.isIOS &&
             !Platform.environment.containsKey('SIMULATOR_DEVICE_NAME')),
-        (WidgetTester tester) async {
+        (tester) async {
       const storage = FlutterSecureStorage();
       // Use default userPresence - should work with device passcode
       const enclaveOptions = IOSOptions(
@@ -415,81 +454,10 @@ void main() {
 
     // Android Algorithm Migration Tests
     testWidgets(
-      'Android: migrates single value from RSA_PKCS1/AES_CBC to OAEP/GCM',
-      skip: !Platform.isAndroid,
-      (WidgetTester tester) async {
-        const legacyOptions = AndroidOptions(
-          keyCipherAlgorithm: KeyCipherAlgorithm.RSA_ECB_PKCS1Padding,
-          storageCipherAlgorithm: StorageCipherAlgorithm.AES_CBC_PKCS7Padding,
-          migrateOnAlgorithmChange: false,
-        );
-
-        // newOptions uses all defaults (OAEP/GCM + migrateOnAlgorithmChange: true)
-        const legacyStorage = FlutterSecureStorage(aOptions: legacyOptions);
-        const newStorage = FlutterSecureStorage();
-
-        await legacyStorage.deleteAll(aOptions: legacyOptions);
-        await legacyStorage.write(
-          key: 'migrate_single_key',
-          value: 'migrate_single_value',
-          aOptions: legacyOptions,
-        );
-
-        final value = await newStorage.read(key: 'migrate_single_key');
-        expect(value, 'migrate_single_value');
-
-        await newStorage.deleteAll();
-      },
-    );
-
-    testWidgets(
-      'Android: migrates multiple values from RSA_PKCS1/AES_CBC to OAEP/GCM',
-      skip: !Platform.isAndroid,
-      (WidgetTester tester) async {
-        const legacyOptions = AndroidOptions(
-          keyCipherAlgorithm: KeyCipherAlgorithm.RSA_ECB_PKCS1Padding,
-          storageCipherAlgorithm: StorageCipherAlgorithm.AES_CBC_PKCS7Padding,
-          migrateOnAlgorithmChange: false,
-        );
-
-        // newStorage uses all defaults (OAEP/GCM + migrateOnAlgorithmChange: true)
-        const legacyStorage = FlutterSecureStorage(aOptions: legacyOptions);
-        const newStorage = FlutterSecureStorage();
-
-        await legacyStorage.deleteAll(aOptions: legacyOptions);
-
-        final entries = {
-          'migrate_key_1': 'migrate_value_1',
-          'migrate_key_2': 'migrate_value_2',
-          'migrate_key_3': 'migrate_value_3',
-        };
-
-        for (final entry in entries.entries) {
-          await legacyStorage.write(
-            key: entry.key,
-            value: entry.value,
-            aOptions: legacyOptions,
-          );
-        }
-
-        for (final entry in entries.entries) {
-          final value = await newStorage.read(key: entry.key);
-          expect(
-            value,
-            entry.value,
-            reason: 'Key ${entry.key} was not migrated correctly',
-          );
-        }
-
-        await newStorage.deleteAll();
-      },
-    );
-
-    testWidgets(
       'Android: data remains readable without migration when algorithms '
       'unchanged',
       skip: !Platform.isAndroid,
-      (WidgetTester tester) async {
+      (tester) async {
         // Uses all defaults (OAEP/GCM + migrateOnAlgorithmChange: true)
         const storage = FlutterSecureStorage();
 
@@ -508,74 +476,37 @@ void main() {
     );
 
     testWidgets(
-      'Android: migrateOnAlgorithmChange false skips migration',
+      'Android: data written before switching to storageNamespace '
+      'must remain readable (#1126)',
       skip: !Platform.isAndroid,
-      (WidgetTester tester) async {
-        const legacyOptions = AndroidOptions(
-          keyCipherAlgorithm: KeyCipherAlgorithm.RSA_ECB_PKCS1Padding,
-          storageCipherAlgorithm: StorageCipherAlgorithm.AES_CBC_PKCS7Padding,
-          migrateOnAlgorithmChange: false,
-          resetOnError: false,
-        );
-        // OAEP/GCM (defaults) but explicitly no migration, no reset
-        const newOptionsNoMigrate = AndroidOptions(
-          migrateOnAlgorithmChange: false,
-          resetOnError: false,
-        );
+      (tester) async {
+        // Write using the default configuration, as a pre-v11 app would.
+        const legacy = FlutterSecureStorage();
 
-        const legacyStorage = FlutterSecureStorage(aOptions: legacyOptions);
-
-        await legacyStorage.deleteAll(aOptions: legacyOptions);
-        await legacyStorage.write(
-          key: 'no_migrate_key',
-          value: 'no_migrate_value',
-          aOptions: legacyOptions,
+        await legacy.deleteAll();
+        await legacy.write(
+          key: 'namespace_migration_key',
+          value: 'written_before_migration',
+        );
+        expect(
+          await legacy.read(key: 'namespace_migration_key'),
+          'written_before_migration',
         );
 
-        // Reading with a different algorithm and no migration should throw or
-        // return null — either is acceptable, the key point is it does NOT
-        // silently return the correct plaintext.
-        try {
-          final value = await const FlutterSecureStorage().read(
-            key: 'no_migrate_key',
-            aOptions: newOptionsNoMigrate,
-          );
-          expect(value, isNot('no_migrate_value'));
-        } on Object catch (_) {
-          // Throwing is also acceptable — data is unreadable without migration
-        }
-
-        await legacyStorage.deleteAll(aOptions: legacyOptions);
-      },
-    );
-
-    testWidgets(
-      'Android: migrateWithBackup migrates data from RSA_PKCS1/AES_CBC to '
-      'OAEP/GCM',
-      skip: !Platform.isAndroid,
-      (WidgetTester tester) async {
-        const legacyOptions = AndroidOptions(
-          keyCipherAlgorithm: KeyCipherAlgorithm.RSA_ECB_PKCS1Padding,
-          storageCipherAlgorithm: StorageCipherAlgorithm.AES_CBC_PKCS7Padding,
-          migrateOnAlgorithmChange: false,
-        );
-        // Default algorithms (OAEP/GCM) with backup-protected migration
-        const backupStorage = FlutterSecureStorage(
-          aOptions: AndroidOptions(migrateWithBackup: true),
-        );
-        const legacyStorage = FlutterSecureStorage(aOptions: legacyOptions);
-
-        await legacyStorage.deleteAll(aOptions: legacyOptions);
-        await legacyStorage.write(
-          key: 'backup_migrate_key',
-          value: 'backup_migrate_value',
-          aOptions: legacyOptions,
+        // Switch to storageNamespace, as the v10 deprecation advised.
+        // The namespace matches the default prefs name, so the data file is
+        // unchanged and only the wrapped key and KeyStore alias move.
+        const namespaced = FlutterSecureStorage(
+          aOptions: AndroidOptions(storageNamespace: 'FlutterSecureStorage'),
         );
 
-        final value = await backupStorage.read(key: 'backup_migrate_key');
-        expect(value, 'backup_migrate_value');
+        expect(
+          await namespaced.read(key: 'namespace_migration_key'),
+          'written_before_migration',
+          reason: 'Switching to storageNamespace must not orphan existing data',
+        );
 
-        await backupStorage.deleteAll();
+        await legacy.deleteAll();
       },
     );
 
@@ -583,7 +514,7 @@ void main() {
         'iOS device: item written without SE returns null when read with SE',
         skip: !(Platform.isIOS &&
             !Platform.environment.containsKey('SIMULATOR_DEVICE_NAME')),
-        (WidgetTester tester) async {
+        (tester) async {
       const storage = FlutterSecureStorage();
       const key = 'it_se_existing_data_key';
       const value = 'existing_value';
@@ -617,7 +548,7 @@ void main() {
     testWidgets('iOS device: deleteAll with Secure Enclave items',
         skip: !(Platform.isIOS &&
             !Platform.environment.containsKey('SIMULATOR_DEVICE_NAME')),
-        (WidgetTester tester) async {
+        (tester) async {
       const storage = FlutterSecureStorage();
       // Use default userPresence - should work with device passcode
       const enclaveOptions = IOSOptions(

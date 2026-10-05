@@ -61,36 +61,36 @@ public class FlutterSecureStorage {
 
     public String read(String key) throws Exception {
         try {
-            return readUnsafe(key);
+            return readUnsafe(storageCipher, key);
         } catch (Exception e) {
             if (handleStorageError("read", key, e)) {
-                return readUnsafe(key); // Retry after deleting corrupted data
+                return readUnsafe(storageCipher, key); // Retry after deleting corrupted data
             }
             throw e;
         }
     }
 
-    private String readUnsafe(String key) throws Exception {
+    private String readUnsafe(StorageCipher cipher, String key) throws Exception {
         String rawValue = preferences.getString(key, null);
         if (config.isUseEncryptedSharedPreferences() && !config.shouldMigrateOnAlgorithmChange()) {
             return rawValue;
         }
-        return decodeRawValue(rawValue);
+        return decodeRawValue(cipher, rawValue);
     }
 
     public Map<String, String> readAll() throws Exception {
         try {
-            return readAllUnsafe();
+            return readAllUnsafe(storageCipher);
         } catch (Exception e) {
             if (handleStorageError("readAll", null, e)) {
-                return readAllUnsafe(); // Retry after deleting corrupted data
+                return readAllUnsafe(storageCipher); // Retry after deleting corrupted data
             }
             throw e;
         }
     }
 
     @SuppressWarnings("unchecked")
-    private Map<String, String> readAllUnsafe() throws Exception {
+    private Map<String, String> readAllUnsafe(StorageCipher cipher) throws Exception {
         Map<String, String> raw = (Map<String, String>) preferences.getAll();
 
         Map<String, String> all = new HashMap<>();
@@ -102,7 +102,7 @@ public class FlutterSecureStorage {
                     all.put(key, entry.getValue());
                 } else {
                     String rawValue = entry.getValue();
-                    String value = decodeRawValue(rawValue);
+                    String value = decodeRawValue(cipher, rawValue);
 
                     all.put(key, value);
                 }
@@ -113,17 +113,17 @@ public class FlutterSecureStorage {
 
     public void write(String key, String value) throws Exception {
         try {
-            writeUnsafe(key, value);
+            writeUnsafe(storageCipher, key, value);
         } catch (Exception e) {
             if (handleStorageError("write", key, e)) {
-                writeUnsafe(key, value); // Retry after deleting corrupted data
+                writeUnsafe(storageCipher, key, value); // Retry after deleting corrupted data
             } else {
                 throw e;
             }
         }
     }
 
-    private void writeUnsafe(String key, String value) throws Exception {
+    private void writeUnsafe(StorageCipher cipher, String key, String value) throws Exception {
         NamespacedConfigSource authority = new NamespacedConfigSource(context, config.getEffectiveDataPrefsName());
         // Failed cleanup may have removed journal/intent fields in RAM only.
         // Their apparent absence cannot authorize an acknowledged recreation.
@@ -133,6 +133,7 @@ public class FlutterSecureStorage {
             StorageCipher recovered = ordinaryMigration(authority, preferences).beforeWrite(key);
             if (recovered != null) {
                 storageCipher = recovered;
+                cipher = recovered;
                 config = config.forRootGeneration(authority.getString(MigrationArtifacts.ACTIVE_GENERATION, null), false);
             }
         }
@@ -141,10 +142,160 @@ public class FlutterSecureStorage {
         if (config.isUseEncryptedSharedPreferences() && !config.shouldMigrateOnAlgorithmChange()) {
             editor.putString(key, value);
         } else {
-            byte[] result = storageCipher.encrypt(value.getBytes(charset));
+            byte[] result = cipher.encrypt(value.getBytes(charset));
             editor.putString(key, Base64.encodeToString(result, 0));
         }
         CheckedPreferences.commit(preferences, editor);
+    }
+
+    public void read(String key, SecurePreferencesCallback<String> callback) {
+        withStorageCipher(new SecurePreferencesCallback<>() {
+            @Override
+            public void onSuccess(StorageCipher cipher) {
+                try {
+                    callback.onSuccess(readUnsafe(cipher, key));
+                } catch (Exception e) {
+                    if (handleStorageError("read", key, e)) {
+                        try {
+                            callback.onSuccess(readUnsafe(cipher, key)); // Retry after deleting corrupted data
+                        } catch (Exception retryError) {
+                            callback.onError(retryError);
+                        }
+                    } else {
+                        callback.onError(e);
+                    }
+                }
+            }
+
+            @Override
+            public void onError(Exception e) {
+                callback.onError(e);
+            }
+        });
+    }
+
+    public void readAll(SecurePreferencesCallback<Map<String, String>> callback) {
+        withStorageCipher(new SecurePreferencesCallback<>() {
+            @Override
+            public void onSuccess(StorageCipher cipher) {
+                try {
+                    callback.onSuccess(readAllUnsafe(cipher));
+                } catch (Exception e) {
+                    if (handleStorageError("readAll", null, e)) {
+                        try {
+                            callback.onSuccess(readAllUnsafe(cipher)); // Retry after deleting corrupted data
+                        } catch (Exception retryError) {
+                            callback.onError(retryError);
+                        }
+                    } else {
+                        callback.onError(e);
+                    }
+                }
+            }
+
+            @Override
+            public void onError(Exception e) {
+                callback.onError(e);
+            }
+        });
+    }
+
+    public void write(String key, String value, SecurePreferencesCallback<Void> callback) {
+        withStorageCipher(new SecurePreferencesCallback<>() {
+            @Override
+            public void onSuccess(StorageCipher cipher) {
+                try {
+                    writeUnsafe(cipher, key, value);
+                    callback.onSuccess(null);
+                } catch (Exception e) {
+                    if (handleStorageError("write", key, e)) {
+                        try {
+                            writeUnsafe(cipher, key, value); // Retry after deleting corrupted data
+                            callback.onSuccess(null);
+                        } catch (Exception retryError) {
+                            callback.onError(retryError);
+                        }
+                    } else {
+                        callback.onError(e);
+                    }
+                }
+            }
+
+            @Override
+            public void onError(Exception e) {
+                callback.onError(e);
+            }
+        });
+    }
+
+    private void withStorageCipher(SecurePreferencesCallback<StorageCipher> callback, boolean isRetryAfterRecovery) {
+        if (config.isUseEncryptedSharedPreferences() && !config.shouldMigrateOnAlgorithmChange()) {
+            callback.onSuccess(null); // The retained ESP backend decrypts its own values.
+            return;
+        }
+        if (storageCipher != null) {
+            callback.onSuccess(storageCipher);
+            return;
+        }
+
+        try {
+            Cipher cipher = storageCipherFactory.getCurrentKeyCipher(context).getCipher(context);
+            authenticateUser(cipher, new SecurePreferencesCallback<>() {
+                @Override
+                public void onSuccess(BiometricPrompt.AuthenticationResult result) {
+                    try {
+                        StorageCipher freshCipher = storageCipherFactory.getCurrentStorageCipher(context, result.getCryptoObject().getCipher());
+                        callback.onSuccess(freshCipher);
+                    } catch (Exception e) {
+                        if (isRetryAfterRecovery) {
+                            callback.onError(e);
+                            return;
+                        }
+                        // The Keystore authenticated the user, but the app key still can't be
+                        // decrypted (corrupted state, or an OEM Keystore invalidating it
+                        // independently of BiometricPrompt's own success signal). Recover once,
+                        // then re-derive this operation's cipher fresh.
+                        NamespacedConfigSource configSource =
+                                new NamespacedConfigSource(context, config.getEffectiveDataPrefsName());
+                        handleKeyMismatch(configSource, new SecurePreferencesCallback<>() {
+                            @Override
+                            public void onSuccess(Void unused) {
+                                withStorageCipher(callback, true);
+                            }
+
+                            @Override
+                            public void onError(Exception recoveryError) {
+                                callback.onError(recoveryError);
+                            }
+                        }, e, "Biometric key decrypt failed after successful authentication");
+                    }
+                }
+
+                @Override
+                public void onError(Exception e) {
+                    callback.onError(e);
+                }
+            });
+        } catch (Exception e) {
+            callback.onError(e);
+        }
+    }
+
+    // Authentication completes asynchronously. Hold the same family lock as
+    // synchronous dispatch and reject a cipher from a retired storage epoch.
+    private void withStorageCipher(SecurePreferencesCallback<StorageCipher> callback) {
+        final String operationFamily = config.getEffectiveDataPrefsName();
+        final long operationEpoch = MigrationArtifacts.familyEpoch(operationFamily);
+        withStorageCipher(new SecurePreferencesCallback<>() {
+            @Override public void onSuccess(StorageCipher cipher) {
+                synchronized (MigrationArtifacts.familyLock(operationFamily)) {
+                    if (operationEpoch != MigrationArtifacts.familyEpoch(operationFamily)) {
+                        callback.onError(new IllegalStateException("Storage family changed before operation"));
+                    } else callback.onSuccess(cipher);
+                }
+            }
+            @Override public void onError(Exception error) { callback.onError(error); }
+        }, false);
     }
 
     public void delete(String key) {
@@ -523,6 +674,13 @@ public class FlutterSecureStorage {
                 return;
             }
 
+            if (config.getRequireBiometricsPerOperation()) {
+                ensureBiometricAvailable(enforceRequired);
+                storageCipher = null;
+                callback.onSuccess(null);
+                return;
+            }
+
             // Biometric authentication required (AES_GCM_NoPadding_BIOMETRIC)
             authenticateUser(cipher, new SecurePreferencesCallback<>() {
                 @Override
@@ -530,12 +688,19 @@ public class FlutterSecureStorage {
                     try {
                         storageCipher = storageCipherFactory.getCurrentStorageCipher(context, result.getCryptoObject().getCipher());
                         Log.d(TAG, "Biometric authentication succeeded");
-                    } catch (Exception e) {
-                        Log.e(TAG, "Failed to initialize storage cipher after authentication", e);
-                        callback.onError(e);
-                        return;
+                        callback.onSuccess(null);
+                    } catch (Throwable e) {
+                        if (e instanceof VirtualMachineError) {
+                            throw (VirtualMachineError) e;
+                        }
+                        // The Keystore authenticated the user, but the app key still can't be
+                        // decrypted (corrupted state, or an OEM Keystore invalidating it
+                        // independently of BiometricPrompt's own success signal). Recover the
+                        // same way a synchronous key mismatch does, instead of leaving the store
+                        // permanently broken.
+                        handleKeyMismatch(configSource, callback, new Exception(e),
+                                "Biometric key decrypt failed after successful authentication");
                     }
-                    callback.onSuccess(null);
                 }
 
                 @Override
@@ -1457,7 +1622,8 @@ public class FlutterSecureStorage {
             if (enforceRequired) {
                 throw new Exception("BIOMETRIC_UNAVAILABLE: Biometric authentication requires Android 9 (API 28) or higher");
             }
-            return; // Skip authentication if not enforced
+            securePreferencesCallback.onSuccess(null);
+            return; // Complete the continuation when authentication is not enforced
         }
 
         BiometricPrompt.CryptoObject crypto = new BiometricPrompt.CryptoObject(cipher);
@@ -1477,13 +1643,17 @@ public class FlutterSecureStorage {
             // DEVICE_CREDENTIAL as a fallback conflicts with a negative button; only add one
             // when using strong-biometric-only (no credential fallback).
             if (config.isStrongBiometricOnly()) {
-                promptInfoBuilder.setNegativeButton(config.getBiometricPromptNegativeButton(), executor, (dialog, which) -> cancellationSignal.cancel());
+                promptInfoBuilder.setNegativeButton(config.getBiometricPromptNegativeButton(), executor, (dialog, which) -> {});
             }
         } else {
             // Android 10 (API level 29) and lower: setAllowedAuthenticators is unavailable.
             // Device credentials are not enabled (setDeviceCredentialAllowed defaults to false),
             // so a negative button is required.
-            promptInfoBuilder.setNegativeButton(config.getBiometricPromptNegativeButton(), executor, (dialog, which) -> cancellationSignal.cancel());
+            promptInfoBuilder.setNegativeButton(config.getBiometricPromptNegativeButton(), executor, (dialog, which) -> {});
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            promptInfoBuilder.setConfirmationRequired(config.isBiometricConfirmationRequired());
         }
 
         BiometricPrompt promptInfo = promptInfoBuilder.build();
@@ -1659,12 +1829,12 @@ public class FlutterSecureStorage {
         }
     }
 
-    private String decodeRawValue(String value) throws Exception {
+    private String decodeRawValue(StorageCipher cipher, String value) throws Exception {
         if (value == null) {
             return null;
         }
         byte[] data = Base64.decode(value, 0);
-        byte[] result = storageCipher.decrypt(data);
+        byte[] result = cipher.decrypt(data);
 
         return new String(result, charset);
     }

@@ -2,7 +2,7 @@
 set -eu
 # Supply an already-installed org.json jar; never downloads dependencies.
 json_jar=${1:?Usage: sh tests/host/run.sh /absolute/path/to/org.json.jar [output_directory]}
-test_output=${2:-/private/tmp/index_owned_fss_host_tests}
+test_output=${2:-${TMPDIR:-/tmp}/index_owned_fss_host_tests}
 host_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 native_sources="$host_dir/../../android/src/main/java"
 mkdir -p "$test_output"

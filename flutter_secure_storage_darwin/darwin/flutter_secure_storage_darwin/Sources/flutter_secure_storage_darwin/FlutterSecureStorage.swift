@@ -146,6 +146,63 @@ class FlutterSecureStorage {
         return accessControl
     }
 
+    /// Recreates the `SecAccessControl` object the way versions prior to 0.3.0 always did, even
+    /// with empty `accessControlFlags`, to find items stored under that legacy envelope.
+    private func legacyAccessControl(params: KeychainQueryParameters) -> SecAccessControl? {
+        guard let accessibilityLevel = params.accessibilityLevel else { return nil }
+        let protection = parseAccessibleAttr(accessibilityLevel)
+        let flags = parseAccessControlFlags(params.accessControlFlags)
+        var error: Unmanaged<CFError>?
+        let accessControl = SecAccessControlCreateWithFlags(nil, protection, flags, &error)
+        if error != nil { return nil }
+        return accessControl
+    }
+
+    /// Fallback search query using the pre-0.3.0 `kSecAttrAccessControl` envelope, for items
+    /// written by older plugin versions (see #1158).
+    private func legacyQuery(from params: KeychainQueryParameters) -> [CFString: Any]? {
+        guard params.accessControlFlags == nil || params.accessControlFlags?.isEmpty == true else { return nil }
+        guard !(params.useSecureEnclave ?? false) else { return nil }
+        guard let accessControl = legacyAccessControl(params: params) else { return nil }
+
+        var query = baseQuery(from: params)
+        query.removeValue(forKey: kSecAttrAccessible)
+        query.removeValue(forKey: kSecAttrSynchronizable)
+        query[kSecAttrAccessControl] = accessControl
+        return query
+    }
+
+    /// All accessibility levels the plugin has ever exposed, used to search for an item across
+    /// every level when the current query's level doesn't match. kSecAttrAccessible is a strict
+    /// filter, but keychain uniqueness on account+service+access group ignores it, so an item
+    /// written under one level becomes unreadable and un-addable after the caller switches
+    /// `IOSOptions(accessibility:)` to another.
+    private static let allAccessibilityLevels: [CFString] = [
+        kSecAttrAccessibleWhenUnlocked,
+        kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+        kSecAttrAccessibleAfterFirstUnlock,
+        kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly,
+    ]
+
+    /// Builds a query for every accessibility level other than the one requested, so a lookup can
+    /// find an item written before the caller switched accessibility levels. Scoped the same way
+    /// as `legacyQuery`: skipped for accessControlFlags-protected and Secure Enclave items, which
+    /// have their own access semantics.
+    private func crossAccessibilityQueries(from params: KeychainQueryParameters) -> [[CFString: Any]] {
+        guard params.accessControlFlags == nil || params.accessControlFlags?.isEmpty == true else { return [] }
+        guard !(params.useSecureEnclave ?? false) else { return [] }
+
+        let currentLevel = parseAccessibleAttr(params.accessibilityLevel)
+        return FlutterSecureStorage.allAccessibilityLevels
+            .filter { $0 != currentLevel }
+            .map { level in
+                var query = baseQuery(from: params)
+                query[kSecAttrAccessible] = level
+                return query
+            }
+    }
+
     /// Constructs a keychain query dictionary from the given parameters.
     private func baseQuery(from params: KeychainQueryParameters) -> [CFString: Any] {
         // Validate parameters
@@ -377,15 +434,35 @@ class FlutterSecureStorage {
             modifiedParams.isSynchronizable = synchronizable // Modify the synchronizable parameter for the query.
             modifiedParams.shouldReturnData = false              // Ensuring no data is returned.
             let query = baseQuery(from: modifiedParams)
-            return SecItemCopyMatching(query as CFDictionary, nil)
+            let status = SecItemCopyMatching(query as CFDictionary, nil)
+
+            // Fall back to the legacy SecAccessControl envelope for items written by older
+            // plugin versions (see #1158).
+            if status == errSecItemNotFound, let legacy = legacyQuery(from: modifiedParams) {
+                let legacyStatus = SecItemCopyMatching(legacy as CFDictionary, nil)
+                if legacyStatus != errSecItemNotFound { return legacyStatus }
+            }
+
+            // Fall back across every other accessibility level for items written before the
+            // caller switched IOSOptions(accessibility:).
+            if status == errSecItemNotFound {
+                for otherQuery in crossAccessibilityQueries(from: modifiedParams) {
+                    let otherStatus = SecItemCopyMatching(otherQuery as CFDictionary, nil)
+                    if otherStatus != errSecItemNotFound { return otherStatus }
+                }
+            }
+
+            return status
         }
 
-        // Check synchronizable items first.
-        let statusSync = queryKeychain(withSynchronizable: true)
-        if statusSync == errSecSuccess {
-            return .success(true)
-        } else if statusSync != errSecItemNotFound {
-            return .failure(OSSecError(status: statusSync))
+        // Check synchronizable items first, unless the data protection keychain is off.
+        if !skipSynchronizableQueries(params) {
+            let statusSync = queryKeychain(withSynchronizable: true)
+            if statusSync == errSecSuccess {
+                return .success(true)
+            } else if statusSync != errSecItemNotFound {
+                return .failure(OSSecError(status: statusSync))
+            }
         }
 
         // Check non-synchronizable items.
@@ -401,30 +478,18 @@ class FlutterSecureStorage {
 
     /// Reads all items from the keychain matching the query parameters.
     internal func readAll(params: KeychainQueryParameters) -> FlutterSecureStorageResponse {
-        var query = baseQuery(from: params)
-        query[kSecMatchLimit] = kSecMatchLimitAll
-        query[kSecReturnAttributes] = true
-        query[kSecReturnData] = true
-
-        var ref: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &ref)
-
-        // Return nil if nothing is found
-        if (status == errSecItemNotFound) {
-            return FlutterSecureStorageResponse(status: errSecSuccess, value: nil)
-        }
-        
-        guard status == errSecSuccess else {
-            return FlutterSecureStorageResponse(status: status, value: nil)
-        }
-
-        var results: [String: String] = [:]
-        if let items = ref as? [[CFString: Any]] {
+        func collectResults(from ref: AnyObject?, into results: inout [String: String]) {
+            guard let items = ref as? [[CFString: Any]] else { return }
             for item in items {
                 guard let key = item[kSecAttrAccount] as? String else { continue }
 
                 // Skip wrapped key items (they're companion items for Secure Enclave)
                 if key.hasPrefix("fss.wrapped.") {
+                    continue
+                }
+
+                // Already found via a previous query (e.g. the current envelope); don't overwrite.
+                if results[key] != nil {
                     continue
                 }
 
@@ -452,7 +517,52 @@ class FlutterSecureStorage {
             }
         }
 
-        return FlutterSecureStorageResponse(status: status, value: results)
+        var query = baseQuery(from: params)
+        query[kSecMatchLimit] = kSecMatchLimitAll
+        query[kSecReturnAttributes] = true
+        query[kSecReturnData] = true
+
+        var ref: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &ref)
+
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            return FlutterSecureStorageResponse(status: status, value: nil)
+        }
+
+        var results: [String: String] = [:]
+        if status == errSecSuccess {
+            collectResults(from: ref, into: &results)
+        }
+
+        // Also check the legacy SecAccessControl envelope so items written by older plugin
+        // versions are included (see #1158).
+        if var legacy = legacyQuery(from: params) {
+            legacy[kSecMatchLimit] = kSecMatchLimitAll
+            legacy[kSecReturnAttributes] = true
+            legacy[kSecReturnData] = true
+
+            var legacyRef: AnyObject?
+            let legacyStatus = SecItemCopyMatching(legacy as CFDictionary, &legacyRef)
+            if legacyStatus == errSecSuccess {
+                collectResults(from: legacyRef, into: &results)
+            }
+        }
+
+        // Also check every other accessibility level so items written before the caller
+        // switched levels are included.
+        for var otherQuery in crossAccessibilityQueries(from: params) {
+            otherQuery[kSecMatchLimit] = kSecMatchLimitAll
+            otherQuery[kSecReturnAttributes] = true
+            otherQuery[kSecReturnData] = true
+
+            var otherRef: AnyObject?
+            let otherStatus = SecItemCopyMatching(otherQuery as CFDictionary, &otherRef)
+            if otherStatus == errSecSuccess {
+                collectResults(from: otherRef, into: &results)
+            }
+        }
+
+        return FlutterSecureStorageResponse(status: errSecSuccess, value: results)
     }
 
     /// Reads a single item from the keychain.
@@ -461,7 +571,22 @@ class FlutterSecureStorage {
         if !(params.useSecureEnclave ?? false) {
             let query = baseQuery(from: params)
             var ref: AnyObject?
-            let status = SecItemCopyMatching(query as CFDictionary, &ref)
+            var status = SecItemCopyMatching(query as CFDictionary, &ref)
+
+            // Fall back to the legacy SecAccessControl envelope for items written by older
+            // plugin versions (see #1158).
+            if status == errSecItemNotFound, let legacy = legacyQuery(from: params) {
+                status = SecItemCopyMatching(legacy as CFDictionary, &ref)
+            }
+
+            // Fall back across every other accessibility level for items written before the
+            // caller switched IOSOptions(accessibility:).
+            if status == errSecItemNotFound {
+                for otherQuery in crossAccessibilityQueries(from: params) {
+                    status = SecItemCopyMatching(otherQuery as CFDictionary, &ref)
+                    if status != errSecItemNotFound { break }
+                }
+            }
 
             if (status == errSecItemNotFound) {
                 return FlutterSecureStorageResponse(status: errSecSuccess, value: nil)
@@ -560,7 +685,7 @@ class FlutterSecureStorage {
                 failureStatus: { $0.status },
                 update: {
                     let update: [CFString: Any] = [kSecValueData: value.data(using: .utf8) as Any]
-                    return SecItemUpdate(query as CFDictionary, update as CFDictionary)
+                    return SecItemUpdate(KeychainUpsert.matchingQueryForUpdate(query) as CFDictionary, update as CFDictionary)
                 },
                 add: {
                     query[kSecValueData] = value.data(using: .utf8)
@@ -604,7 +729,7 @@ class FlutterSecureStorage {
                 let keyExists = (containsKey(params: keyParams).getOrElse(false))
                 var keyStatus: OSStatus
                 if keyExists {
-                    keyStatus = SecItemUpdate(keyQuery as CFDictionary, [kSecValueData: wrappedKey] as CFDictionary)
+                    keyStatus = SecItemUpdate(KeychainUpsert.matchingQueryForUpdate(keyQuery) as CFDictionary, [kSecValueData: wrappedKey] as CFDictionary)
                 } else {
                     keyStatus = SecItemAdd(keyQuery as CFDictionary, nil)
                 }
@@ -620,7 +745,7 @@ class FlutterSecureStorage {
                 let dataExists = (containsKey(params: params).getOrElse(false))
                 var dataStatus: OSStatus
                 if dataExists {
-                    dataStatus = SecItemUpdate(dataQuery as CFDictionary, [kSecValueData: blob] as CFDictionary)
+                    dataStatus = SecItemUpdate(KeychainUpsert.matchingQueryForUpdate(dataQuery) as CFDictionary, [kSecValueData: blob] as CFDictionary)
                 } else {
                     dataStatus = SecItemAdd(dataQuery as CFDictionary, nil)
                 }
@@ -636,7 +761,7 @@ class FlutterSecureStorage {
             var query = baseQuery(from: fallbackParams)
             if keyExists {
                 let update: [CFString: Any] = [kSecValueData: value.data(using: .utf8) as Any]
-                let status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
+                let status = SecItemUpdate(KeychainUpsert.matchingQueryForUpdate(query) as CFDictionary, update as CFDictionary)
                 return FlutterSecureStorageResponse(status: status, value: nil)
             } else {
                 query[kSecValueData] = value.data(using: .utf8)
@@ -682,6 +807,16 @@ class FlutterSecureStorage {
         return result
     }
 
+    /// True on macOS when the data protection keychain is off, where a
+    /// synchronizable query lacks the entitlement to run.
+    private func skipSynchronizableQueries(_ params: KeychainQueryParameters) -> Bool {
+        #if os(macOS)
+        return !params.usesDataProtectionKeychain
+        #else
+        return false
+        #endif
+    }
+
     /// Private helper method to perform keychain deletion.
     /// Attempts to delete items with both synchronizable states and without accessibility constraints
     /// to ensure complete removal regardless of how items were originally stored.
@@ -706,7 +841,11 @@ class FlutterSecureStorage {
             return SecItemDelete(query as CFDictionary)
         }
 
-        let statusSync = deleteFromKeychain(withSynchronizable: true)
+        // Without the data protection keychain there's no synchronizable item to
+        // delete, and the query lacks the entitlement to run.
+        let statusSync = skipSynchronizableQueries(params)
+            ? errSecItemNotFound
+            : deleteFromKeychain(withSynchronizable: true)
         let statusNonSync = deleteFromKeychain(withSynchronizable: false)
 
         // Return success if both operations report item not found

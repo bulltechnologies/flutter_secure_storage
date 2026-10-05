@@ -4,6 +4,17 @@ import Security
 /// recovery. Keep the platform calls injectable so this rule can be tested
 /// without accessing a real Keychain or changing authentication policy.
 enum KeychainUpsert {
+    /// SecItemUpdate accepts matching attributes, not result requests. Reads
+    /// and adds may share the base query, so remove these only at update time.
+    static func matchingQueryForUpdate(_ query: [CFString: Any]) -> [CFString: Any] {
+        var matching = query
+        for key in [kSecReturnData, kSecReturnAttributes, kSecReturnRef,
+                    kSecReturnPersistentRef, kSecMatchLimit] {
+            matching.removeValue(forKey: key)
+        }
+        return matching
+    }
+
     static func write<Failure: Error>(
         presence: Result<Bool, Failure>,
         failureStatus: (Failure) -> OSStatus,

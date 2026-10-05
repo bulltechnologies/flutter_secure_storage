@@ -202,27 +202,27 @@ abstract class AppleOptions extends Options {
 
   @override
   Map<String, String> toMap() => <String, String>{
-        if (accountName != null) 'accountName': accountName!,
-        if (groupId != null) 'groupId': groupId!,
-        if (accessibility != null) 'accessibility': accessibility!.name,
-        if (label != null) 'label': label!,
-        if (description != null) 'description': description!,
-        if (comment != null) 'comment': comment!,
-        'synchronizable': '$synchronizable',
-        if (isInvisible != null) 'isInvisible': '$isInvisible',
-        if (isNegative != null) 'isNegative': '$isNegative',
-        if (creationDate != null)
-          'creationDate': creationDate!.toIso8601String(),
-        if (lastModifiedDate != null)
-          'lastModifiedDate': lastModifiedDate!.toIso8601String(),
-        if (resultLimit != null) 'resultLimit': resultLimit!.toString(),
-        if (shouldReturnPersistentReference != null)
-          'shouldReturnPersistentReference': '$shouldReturnPersistentReference',
-        if (authenticationUIBehavior != null)
-          'authenticationUIBehavior': authenticationUIBehavior!,
-        if (accessControlFlags.isNotEmpty)
-          'accessControlFlags':
-              accessControlFlags.map((e) => e.name).toList().toString(),
-        'useSecureEnclave': '$useSecureEnclave',
-      };
+    'accountName': ?accountName,
+    'groupId': ?groupId,
+    if (accessibility != null) 'accessibility': accessibility!.name,
+    'label': ?label,
+    'description': ?description,
+    'comment': ?comment,
+    'synchronizable': '$synchronizable',
+    if (isInvisible != null) 'isInvisible': '$isInvisible',
+    if (isNegative != null) 'isNegative': '$isNegative',
+    if (creationDate != null) 'creationDate': creationDate!.toIso8601String(),
+    if (lastModifiedDate != null)
+      'lastModifiedDate': lastModifiedDate!.toIso8601String(),
+    if (resultLimit != null) 'resultLimit': resultLimit!.toString(),
+    if (shouldReturnPersistentReference != null)
+      'shouldReturnPersistentReference': '$shouldReturnPersistentReference',
+    'authenticationUIBehavior': ?authenticationUIBehavior,
+    if (accessControlFlags.isNotEmpty)
+      'accessControlFlags': accessControlFlags
+          .map((e) => e.name)
+          .toList()
+          .toString(),
+    'useSecureEnclave': '$useSecureEnclave',
+  };
 }

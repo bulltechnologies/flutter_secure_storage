@@ -1,8 +1,3 @@
-// Some tests intentionally construct AndroidOptions with deprecated cipher
-// algorithms to verify that legacy algorithm options serialise correctly and
-// that migration paths continue to work.
-// ignore_for_file: deprecated_member_use_from_same_package
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -103,8 +98,10 @@ void main() {
       const options = <String, String>{};
       await methodStorage.write(key: key, value: 'test', options: options);
 
-      final result =
-          await methodStorage.containsKey(key: key, options: options);
+      final result = await methodStorage.containsKey(
+        key: key,
+        options: options,
+      );
 
       expect(result, true);
     });
@@ -172,8 +169,9 @@ void main() {
     });
 
     test('Can be extended', () {
-      FlutterSecureStoragePlatform.instance =
-          TestFlutterSecureStoragePlatform({});
+      FlutterSecureStoragePlatform.instance = TestFlutterSecureStoragePlatform(
+        {},
+      );
     });
   });
 
@@ -374,15 +372,15 @@ void main() {
       const options = AndroidOptions.defaultOptions;
 
       expect(options.toMap(), {
-        'encryptedSharedPreferences': 'false',
         'resetOnError': 'true',
         'migrateOnAlgorithmChange': 'true',
         'migrateWithBackup': 'false',
         'enforceBiometrics': 'false',
+        'requireBiometricsPerOperation': 'false',
         'keyCipherAlgorithm': 'RSA_ECB_OAEPwithSHA_256andMGF1Padding',
         'storageCipherAlgorithm': 'AES_GCM_NoPadding',
         'biometricType': 'biometricOrDeviceCredential',
-        'sharedPreferencesName': '',
+        'requireBiometricConfirmation': 'true',
         'preferencesKeyPrefix': '',
         'storageNamespace': '',
         'biometricPromptTitle': 'Authenticate to access',
@@ -405,8 +403,7 @@ void main() {
         resetOnError: false,
         migrateOnAlgorithmChange: false,
         enforceBiometrics: true,
-        keyCipherAlgorithm: KeyCipherAlgorithm.RSA_ECB_PKCS1Padding,
-        storageCipherAlgorithm: StorageCipherAlgorithm.AES_CBC_PKCS7Padding,
+        keyCipherAlgorithm: KeyCipherAlgorithm.AES_GCM_NoPadding,
         storageNamespace: 'customPrefs',
         preferencesKeyPrefix: 'customPrefix',
         biometricPromptTitle: 'Custom Title',
@@ -414,15 +411,15 @@ void main() {
       );
 
       expect(options.toMap(), {
-        'encryptedSharedPreferences': 'false',
         'resetOnError': 'false',
         'migrateOnAlgorithmChange': 'false',
         'migrateWithBackup': 'false',
         'enforceBiometrics': 'true',
-        'keyCipherAlgorithm': 'RSA_ECB_PKCS1Padding',
-        'storageCipherAlgorithm': 'AES_CBC_PKCS7Padding',
+        'requireBiometricsPerOperation': 'false',
+        'keyCipherAlgorithm': 'AES_GCM_NoPadding',
+        'storageCipherAlgorithm': 'AES_GCM_NoPadding',
         'biometricType': 'biometricOrDeviceCredential',
-        'sharedPreferencesName': '',
+        'requireBiometricConfirmation': 'true',
         'preferencesKeyPrefix': 'customPrefix',
         'storageNamespace': 'customPrefs',
         'biometricPromptTitle': 'Custom Title',
@@ -431,30 +428,31 @@ void main() {
       });
     });
 
-    test('AndroidOptions.biometric constructor should have correct defaults',
-        () {
-      const options = AndroidOptions.biometric();
-
-      expect(options.toMap(), {
-        'encryptedSharedPreferences': 'false',
-        'resetOnError': 'true',
-        'migrateOnAlgorithmChange': 'true',
-        'migrateWithBackup': 'false',
-        'enforceBiometrics': 'false',
-        'keyCipherAlgorithm': 'AES_GCM_NoPadding',
-        'storageCipherAlgorithm': 'AES_GCM_NoPadding',
-        'biometricType': 'biometricOrDeviceCredential',
-        'sharedPreferencesName': '',
-        'preferencesKeyPrefix': '',
-        'storageNamespace': '',
-        'biometricPromptTitle': 'Authenticate to access',
-        'biometricPromptSubtitle': 'Use biometrics or device credentials',
-        'biometricPromptNegativeButton': 'Cancel',
-      });
-    });
-
     test(
-        'AndroidOptions.biometric with enforceBiometrics=true '
+      'AndroidOptions.biometric constructor should have correct defaults',
+      () {
+        const options = AndroidOptions.biometric();
+
+        expect(options.toMap(), {
+          'resetOnError': 'true',
+          'migrateOnAlgorithmChange': 'true',
+          'migrateWithBackup': 'false',
+          'enforceBiometrics': 'false',
+          'requireBiometricsPerOperation': 'false',
+          'keyCipherAlgorithm': 'AES_GCM_NoPadding',
+          'storageCipherAlgorithm': 'AES_GCM_NoPadding',
+          'biometricType': 'biometricOrDeviceCredential',
+          'requireBiometricConfirmation': 'true',
+          'preferencesKeyPrefix': '',
+          'storageNamespace': '',
+          'biometricPromptTitle': 'Authenticate to access',
+          'biometricPromptSubtitle': 'Use biometrics or device credentials',
+          'biometricPromptNegativeButton': 'Cancel',
+        });
+      },
+    );
+
+    test('AndroidOptions.biometric with enforceBiometrics=true '
         'requires authentication', () {
       const options = AndroidOptions.biometric(
         enforceBiometrics: true,
@@ -463,15 +461,15 @@ void main() {
       );
 
       expect(options.toMap(), {
-        'encryptedSharedPreferences': 'false',
         'resetOnError': 'true',
         'migrateOnAlgorithmChange': 'true',
         'migrateWithBackup': 'false',
         'enforceBiometrics': 'true',
+        'requireBiometricsPerOperation': 'false',
         'keyCipherAlgorithm': 'AES_GCM_NoPadding',
         'storageCipherAlgorithm': 'AES_GCM_NoPadding',
         'biometricType': 'biometricOrDeviceCredential',
-        'sharedPreferencesName': '',
+        'requireBiometricConfirmation': 'true',
         'preferencesKeyPrefix': '',
         'storageNamespace': '',
         'biometricPromptTitle': 'Unlock Secure Storage',
@@ -492,18 +490,18 @@ void main() {
       expect(options.toMap()['storageCipherAlgorithm'], 'AES_GCM_NoPadding');
     });
 
-    test('AndroidOptions with legacy RSA cipher algorithms', () {
-      const options = AndroidOptions(
-        keyCipherAlgorithm: KeyCipherAlgorithm.RSA_ECB_PKCS1Padding,
-        storageCipherAlgorithm: StorageCipherAlgorithm.AES_CBC_PKCS7Padding,
-      );
+    test(
+      'AndroidOptions.biometric with requireBiometricsPerOperation=true',
+      () {
+        const options = AndroidOptions.biometric(
+          enforceBiometrics: true,
+          requireBiometricsPerOperation: true,
+        );
 
-      expect(options.toMap()['keyCipherAlgorithm'], 'RSA_ECB_PKCS1Padding');
-      expect(
-        options.toMap()['storageCipherAlgorithm'],
-        'AES_CBC_PKCS7Padding',
-      );
-    });
+        expect(options.toMap()['enforceBiometrics'], 'true');
+        expect(options.toMap()['requireBiometricsPerOperation'], 'true');
+      },
+    );
 
     test('AndroidOptions with AES key cipher (for biometric support)', () {
       const options = AndroidOptions(
@@ -523,8 +521,7 @@ void main() {
         resetOnError: false,
         migrateOnAlgorithmChange: false,
         enforceBiometrics: true,
-        keyCipherAlgorithm: KeyCipherAlgorithm.RSA_ECB_PKCS1Padding,
-        storageCipherAlgorithm: StorageCipherAlgorithm.AES_CBC_PKCS7Padding,
+        keyCipherAlgorithm: KeyCipherAlgorithm.AES_GCM_NoPadding,
         storageNamespace: 'newPrefs',
         preferencesKeyPrefix: 'newPrefix',
         biometricPromptTitle: 'New Title',
@@ -532,15 +529,15 @@ void main() {
       );
 
       expect(copied.toMap(), {
-        'encryptedSharedPreferences': 'false',
         'resetOnError': 'false',
         'migrateOnAlgorithmChange': 'false',
         'migrateWithBackup': 'false',
         'enforceBiometrics': 'true',
-        'keyCipherAlgorithm': 'RSA_ECB_PKCS1Padding',
-        'storageCipherAlgorithm': 'AES_CBC_PKCS7Padding',
+        'requireBiometricsPerOperation': 'false',
+        'keyCipherAlgorithm': 'AES_GCM_NoPadding',
+        'storageCipherAlgorithm': 'AES_GCM_NoPadding',
         'biometricType': 'biometricOrDeviceCredential',
-        'sharedPreferencesName': '',
+        'requireBiometricConfirmation': 'true',
         'preferencesKeyPrefix': 'newPrefix',
         'storageNamespace': 'newPrefs',
         'biometricPromptTitle': 'New Title',
@@ -563,13 +560,24 @@ void main() {
       expect(copied.toMap()['storageNamespace'], 'updated');
     });
 
+    test(
+      'copyWith should correctly override requireBiometricsPerOperation',
+      () {
+        const original = AndroidOptions.biometric(enforceBiometrics: true);
+
+        final copied = original.copyWith(requireBiometricsPerOperation: true);
+
+        expect(copied.toMap()['requireBiometricsPerOperation'], 'true');
+        expect(original.toMap()['requireBiometricsPerOperation'], 'false');
+      },
+    );
+
     test('copyWith without changes should retain original values', () {
       const original = AndroidOptions(
         resetOnError: false,
         migrateOnAlgorithmChange: false,
         enforceBiometrics: true,
-        keyCipherAlgorithm: KeyCipherAlgorithm.RSA_ECB_PKCS1Padding,
-        storageCipherAlgorithm: StorageCipherAlgorithm.AES_CBC_PKCS7Padding,
+        keyCipherAlgorithm: KeyCipherAlgorithm.AES_GCM_NoPadding,
       );
 
       final copied = original.copyWith();
@@ -577,25 +585,10 @@ void main() {
       expect(copied.toMap(), original.toMap());
     });
 
-    test(
-        'AndroidOptions handles null sharedPreferencesName and '
-        'preferencesKeyPrefix', () {
+    test('AndroidOptions handles null preferencesKeyPrefix', () {
       const options = AndroidOptions.defaultOptions;
 
-      expect(options.toMap()['sharedPreferencesName'], '');
       expect(options.toMap()['preferencesKeyPrefix'], '');
-    });
-
-    // TODO(remove): delete this test when sharedPreferencesName is removed.
-    // It exists to ensure the deprecated parameter still works until removal,
-    // and to fail loudly when the parameter is eventually deleted.
-    test('deprecated sharedPreferencesName still maps to its legacy key', () {
-      // Intentionally tests the deprecated parameter —
-      // remove this test alongside the parameter when it is deleted.
-      const options = AndroidOptions(sharedPreferencesName: 'legacyPrefs');
-
-      expect(options.toMap()['sharedPreferencesName'], 'legacyPrefs');
-      expect(options.toMap()['storageNamespace'], '');
     });
 
     test('AndroidOptions with custom biometric prompts', () {
@@ -666,22 +659,6 @@ void main() {
 
       expect(copied.toMap()['migrateWithBackup'], 'true');
       expect(copied.toMap()['migrateOnAlgorithmChange'], 'true');
-    });
-
-    test('Deprecated encryptedSharedPreferences still functions', () {
-      const options = AndroidOptions(encryptedSharedPreferences: true);
-
-      expect(options.toMap()['encryptedSharedPreferences'], 'true');
-    });
-
-    test('AndroidOptions.biometric with deprecated encryptedSharedPreferences',
-        () {
-      const options = AndroidOptions.biometric(
-        encryptedSharedPreferences: true,
-      );
-
-      expect(options.toMap()['encryptedSharedPreferences'], 'true');
-      expect(options.toMap()['keyCipherAlgorithm'], 'AES_GCM_NoPadding');
     });
 
     test('All KeyCipherAlgorithm enum values are correctly mapped', () {
@@ -813,14 +790,15 @@ void main() {
     });
 
     test(
-        'WindowsOptions copyWith without changes should retain original values',
-        () {
-      const original = WindowsOptions(useBackwardCompatibility: true);
+      'WindowsOptions copyWith without changes should retain original values',
+      () {
+        const original = WindowsOptions(useBackwardCompatibility: true);
 
-      final copied = original.copyWith();
+        final copied = original.copyWith();
 
-      expect(copied.toMap(), original.toMap());
-    });
+        expect(copied.toMap(), original.toMap());
+      },
+    );
 
     test('WindowsOptions defaultOptions matches default constructor', () {
       const defaultOptions = WindowsOptions.defaultOptions;
@@ -878,8 +856,9 @@ void main() {
         'resultLimit': '10',
         'shouldReturnPersistentReference': 'true',
         'authenticationUIBehavior': 'require_auth',
-        'accessControlFlags':
-            [AccessControlFlag.biometryCurrentSet.name].toString(),
+        'accessControlFlags': [
+          AccessControlFlag.biometryCurrentSet.name,
+        ].toString(),
         'useSecureEnclave': 'false',
       });
     });
@@ -1019,8 +998,9 @@ void main() {
         ..registerListener(key: 'key2', listener: trackingListener);
 
       // Setup mock for deleteAll
-      when(() => mockPlatform.deleteAll(options: any(named: 'options')))
-          .thenAnswer((_) async {});
+      when(
+        () => mockPlatform.deleteAll(options: any(named: 'options')),
+      ).thenAnswer((_) async {});
 
       // Call deleteAll
       await storage.deleteAll();
@@ -1113,8 +1093,7 @@ void main() {
   });
 
   group('iOS/macOS Cupertino Protected Data Tests', () {
-    test(
-        'onCupertinoProtectedDataAvailabilityChanged returns stream '
+    test('onCupertinoProtectedDataAvailabilityChanged returns stream '
         'for MethodChannel platform', () {
       // Set platform to MethodChannel BEFORE creating storage
       FlutterSecureStoragePlatform.instance = methodStorage;
@@ -1132,8 +1111,7 @@ void main() {
       FlutterSecureStoragePlatform.instance = mockPlatform;
     });
 
-    test(
-        'onCupertinoProtectedDataAvailabilityChanged returns null '
+    test('onCupertinoProtectedDataAvailabilityChanged returns null '
         'for non-MethodChannel platform', () {
       // Use mock platform (not MethodChannel)
       final result = storage.onCupertinoProtectedDataAvailabilityChanged;
@@ -1142,8 +1120,7 @@ void main() {
       expect(result, isNull);
     });
 
-    test(
-        'isCupertinoProtectedDataAvailable calls MethodChannel platform '
+    test('isCupertinoProtectedDataAvailable calls MethodChannel platform '
         'method', () async {
       // Set platform to MethodChannel BEFORE creating storage
       FlutterSecureStoragePlatform.instance = methodStorage;
@@ -1153,8 +1130,8 @@ void main() {
       // In test environment, the actual platform method may not be
       // fully implemented, so we just verify the call completes
       // and the conditional branch is executed
-      final result =
-          await methodChannelStorage.isCupertinoProtectedDataAvailable();
+      final result = await methodChannelStorage
+          .isCupertinoProtectedDataAvailable();
 
       // The method executes the MethodChannel branch (covered for codecov)
       // Result may be null in test environment, but the code path is covered
@@ -1164,8 +1141,7 @@ void main() {
       FlutterSecureStoragePlatform.instance = mockPlatform;
     });
 
-    test(
-        'isCupertinoProtectedDataAvailable returns null '
+    test('isCupertinoProtectedDataAvailable returns null '
         'for non-MethodChannel platform', () async {
       // Use mock platform (not MethodChannel)
       final result = await storage.isCupertinoProtectedDataAvailable();
@@ -1174,8 +1150,7 @@ void main() {
       expect(result, isNull);
     });
 
-    test(
-        'onCupertinoProtectedDataAvailabilityChanged accesses platform '
+    test('onCupertinoProtectedDataAvailabilityChanged accesses platform '
         'for type check', () {
       // This test verifies the method can be called and performs
       // the platform type check without crashing
@@ -1185,14 +1160,43 @@ void main() {
       );
     });
 
-    test('isCupertinoProtectedDataAvailable accesses platform for type check',
-        () async {
-      // This test verifies the method can be called and performs
-      // the platform type check without crashing
-      await expectLater(
-        storage.isCupertinoProtectedDataAvailable(),
-        completion(isNull),
+    test(
+      'isCupertinoProtectedDataAvailable accesses platform for type check',
+      () async {
+        // This test verifies the method can be called and performs
+        // the platform type check without crashing
+        await expectLater(
+          storage.isCupertinoProtectedDataAvailable(),
+          completion(isNull),
+        );
+      },
+    );
+  });
+
+  group('checkUpgradeStatus', () {
+    test('delegates to the platform with the selected options', () async {
+      const report = SecureStorageUpgradeStatus(
+        state: SecureStorageUpgradeState.legacyDataUnreadable,
+        reason: SecureStorageUpgradeReason.missingAlgorithmMarkers,
+        entryCount: 2,
+        willDiscardOnNextAccess: true,
       );
+      when(
+        () => mockPlatform.checkUpgradeStatus(
+          options: any(named: 'options'),
+        ),
+      ).thenAnswer((_) async => report);
+
+      final result = await storage.checkUpgradeStatus(
+        aOptions: AndroidOptions.defaultOptions,
+      );
+
+      expect(result, report);
+      verify(
+        () => mockPlatform.checkUpgradeStatus(
+          options: any(named: 'options'),
+        ),
+      ).called(1);
     });
   });
 
@@ -1209,8 +1213,9 @@ void main() {
       );
 
       // The test platform should have the initial values
-      final platform = FlutterSecureStoragePlatform.instance
-          as TestFlutterSecureStoragePlatform;
+      final platform =
+          FlutterSecureStoragePlatform.instance
+              as TestFlutterSecureStoragePlatform;
       expect(platform.data, equals(testData));
     });
 
@@ -1222,8 +1227,9 @@ void main() {
         isA<TestFlutterSecureStoragePlatform>(),
       );
 
-      final platform = FlutterSecureStoragePlatform.instance
-          as TestFlutterSecureStoragePlatform;
+      final platform =
+          FlutterSecureStoragePlatform.instance
+              as TestFlutterSecureStoragePlatform;
       expect(platform.data.isEmpty, isTrue);
     });
   });
@@ -1294,67 +1300,73 @@ void main() {
       ).called(1);
     });
 
-    test('_selectOptions returns macOS options when platform is macOS',
-        () async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    test(
+      '_selectOptions returns macOS options when platform is macOS',
+      () async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
 
-      await storage.write(
-        key: 'test',
-        value: 'value',
-        mOptions: const MacOsOptions(
-          accessibility: KeychainAccessibility.first_unlock,
-        ),
-      );
-
-      // Verify the write was called (covers macOS branch)
-      verify(
-        () => mockPlatform.write(
+        await storage.write(
           key: 'test',
           value: 'value',
-          options: any(named: 'options'),
-        ),
-      ).called(1);
-    });
+          mOptions: const MacOsOptions(
+            accessibility: KeychainAccessibility.first_unlock,
+          ),
+        );
 
-    test('_selectOptions returns Windows options when platform is Windows',
-        () async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+        // Verify the write was called (covers macOS branch)
+        verify(
+          () => mockPlatform.write(
+            key: 'test',
+            value: 'value',
+            options: any(named: 'options'),
+          ),
+        ).called(1);
+      },
+    );
 
-      await storage.write(
-        key: 'test',
-        value: 'value',
-        wOptions: WindowsOptions.defaultOptions,
-      );
+    test(
+      '_selectOptions returns Windows options when platform is Windows',
+      () async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.windows;
 
-      // Verify the write was called (covers Windows branch)
-      verify(
-        () => mockPlatform.write(
+        await storage.write(
           key: 'test',
           value: 'value',
-          options: any(named: 'options'),
-        ),
-      ).called(1);
-    });
+          wOptions: WindowsOptions.defaultOptions,
+        );
 
-    test('_selectOptions returns Linux options when platform is Linux',
-        () async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+        // Verify the write was called (covers Windows branch)
+        verify(
+          () => mockPlatform.write(
+            key: 'test',
+            value: 'value',
+            options: any(named: 'options'),
+          ),
+        ).called(1);
+      },
+    );
 
-      await storage.write(
-        key: 'test',
-        value: 'value',
-        lOptions: LinuxOptions.defaultOptions,
-      );
+    test(
+      '_selectOptions returns Linux options when platform is Linux',
+      () async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.linux;
 
-      // Verify the write was called (covers Linux branch)
-      verify(
-        () => mockPlatform.write(
+        await storage.write(
           key: 'test',
           value: 'value',
-          options: any(named: 'options'),
-        ),
-      ).called(1);
-    });
+          lOptions: LinuxOptions.defaultOptions,
+        );
+
+        // Verify the write was called (covers Linux branch)
+        verify(
+          () => mockPlatform.write(
+            key: 'test',
+            value: 'value',
+            options: any(named: 'options'),
+          ),
+        ).called(1);
+      },
+    );
 
     test('_selectOptions throws for unsupported platform', () async {
       debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;

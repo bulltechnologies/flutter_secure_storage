@@ -6,16 +6,30 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
-/// Linux locked-keyring integration tests.
+/// Linux integration tests for an existing, genuinely locked default
+/// collection.
 ///
-/// Must run before the keyring is unlocked. The gnome-keyring-daemon is
-/// registered on D-Bus but the default collection is locked, so every
-/// libsecret call that requires collection access will fail.
-///
-/// Run with (keyring daemon running but locked):
-///   flutter test integration_test/linux_locked_keyring_test.dart -d linux
+/// CI creates and uses the default collection, locks it over D-Bus, and then
+/// runs this file with graphical prompting disabled.
 
 const _storage = FlutterSecureStorage();
+
+Future<void> _expectLockedKeyring(Future<void> Function() operation) async {
+  Object? caught;
+  try {
+    await operation();
+  } on Object catch (error) {
+    caught = error;
+  }
+
+  expect(caught, isNotNull, reason: 'Expected an exception');
+  expect(caught, isNot(isA<FormatException>()));
+  expect(caught, isA<PlatformException>());
+
+  final error = caught! as PlatformException;
+  expect(error.code, 'KeyringLocked');
+  expect(error.message, 'KeyringLocked');
+}
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -23,65 +37,38 @@ void main() {
   group(
     'Locked keyring',
     () {
-      Future<void> expectLockedKeyringError(Future<void> Function() op) async {
-        Object? caught;
-        try {
-          await op();
-        } on Object catch (e) {
-          caught = e;
-        }
-
-        expect(
-          caught,
-          isNotNull,
-          reason: 'Expected an exception but the operation succeeded',
+      testWidgets('read throws KeyringLocked', (_) async {
+        await _expectLockedKeyring(
+          () async {
+            await _storage.read(key: 'k');
+          },
         );
-
-        // A FormatException means the native plugin returned non-UTF-8 bytes
-        // that crashed Dart's StandardMethodCodec decoder.
-        expect(caught, isNot(isA<FormatException>()));
-
-        expect(
-          caught,
-          isA<PlatformException>(),
-          reason: 'Expected PlatformException, got ${caught.runtimeType}',
-        );
-
-        final e = caught! as PlatformException;
-
-        expect(e.code, 'KeyringLocked');
-        expect(e.message, isA<String>());
-      }
-
-      testWidgets('read throws on locked keyring', (_) async {
-        await expectLockedKeyringError(() => _storage.read(key: 'k'));
       });
 
-      testWidgets('write throws on locked keyring', (_) async {
-        await expectLockedKeyringError(
+      testWidgets('write throws KeyringLocked', (_) async {
+        await _expectLockedKeyring(
           () => _storage.write(key: 'k', value: 'v'),
         );
       });
 
-      testWidgets('readAll throws on locked keyring', (_) async {
-        await expectLockedKeyringError(() => _storage.readAll());
+      testWidgets('readAll throws KeyringLocked', (_) async {
+        await _expectLockedKeyring(_storage.readAll);
       });
 
-      testWidgets('containsKey throws on locked keyring', (_) async {
-        await expectLockedKeyringError(() => _storage.containsKey(key: 'k'));
+      testWidgets('containsKey throws KeyringLocked', (_) async {
+        await _expectLockedKeyring(
+          () async {
+            await _storage.containsKey(key: 'k');
+          },
+        );
       });
 
-      testWidgets('delete throws on locked keyring', (_) async {
-        await expectLockedKeyringError(() => _storage.delete(key: 'k'));
+      testWidgets('delete throws KeyringLocked', (_) async {
+        await _expectLockedKeyring(() => _storage.delete(key: 'k'));
       });
 
-      // deleteAll bypasses warmupKeyring and calls secret_password_storev_sync
-      // directly, so the raw GError message reaches the catch block. If that
-      // message contains non-UTF-8 bytes Dart throws FormatException instead
-      // of PlatformException.
-      testWidgets('deleteAll throws PlatformException, not FormatException',
-          (_) async {
-        await expectLockedKeyringError(() => _storage.deleteAll());
+      testWidgets('deleteAll throws KeyringLocked', (_) async {
+        await _expectLockedKeyring(_storage.deleteAll);
       });
     },
     skip: kIsWeb || !Platform.isLinux ? 'Linux only' : null,

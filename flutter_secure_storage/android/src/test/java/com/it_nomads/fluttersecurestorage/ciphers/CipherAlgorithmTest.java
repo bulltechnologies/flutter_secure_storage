@@ -12,11 +12,6 @@ public class CipherAlgorithmTest {
     // -------------------------------------------------------------------------
 
     @Test
-    public void keyCipher_fromString_RSA_ECB_PKCS1Padding() {
-        assertEquals(KeyCipherAlgorithm.RSA_ECB_PKCS1Padding, KeyCipherAlgorithm.fromString("RSA_ECB_PKCS1Padding"));
-    }
-
-    @Test
     public void keyCipher_fromString_RSA_ECB_OAEPwithSHA_256andMGF1Padding() {
         assertEquals(
             KeyCipherAlgorithm.RSA_ECB_OAEPwithSHA_256andMGF1Padding,
@@ -48,14 +43,17 @@ public class CipherAlgorithmTest {
         assertThrows(IllegalArgumentException.class, () -> KeyCipherAlgorithm.fromString(""));
     }
 
+    @Test
+    public void keyCipher_fromString_legacyPKCS1_keepsItsReader() {
+        assertEquals(
+            KeyCipherAlgorithm.RSA_ECB_PKCS1Padding,
+            KeyCipherAlgorithm.fromString("RSA_ECB_PKCS1Padding")
+        );
+    }
+
     // -------------------------------------------------------------------------
     // StorageCipherAlgorithm.fromString
     // -------------------------------------------------------------------------
-
-    @Test
-    public void storageCipher_fromString_AES_CBC_PKCS7Padding() {
-        assertEquals(StorageCipherAlgorithm.AES_CBC_PKCS7Padding, StorageCipherAlgorithm.fromString("AES_CBC_PKCS7Padding"));
-    }
 
     @Test
     public void storageCipher_fromString_AES_GCM_NoPadding() {
@@ -79,6 +77,14 @@ public class CipherAlgorithmTest {
     @Test
     public void storageCipher_fromString_emptyString_throwsIllegalArgumentException() {
         assertThrows(IllegalArgumentException.class, () -> StorageCipherAlgorithm.fromString(""));
+    }
+
+    @Test
+    public void storageCipher_fromString_legacyCBC_keepsItsReader() {
+        assertEquals(
+            StorageCipherAlgorithm.AES_CBC_PKCS7Padding,
+            StorageCipherAlgorithm.fromString("AES_CBC_PKCS7Padding")
+        );
     }
 
     // -------------------------------------------------------------------------

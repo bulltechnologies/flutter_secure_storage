@@ -1,0 +1,16 @@
+# .github/workflows/auto-assign-pr.yml
+name: 'Auto Author Assign'
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  assign-author:
+    if: github.repository == 'juliansteenbakker/flutter_secure_storage'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: toshimaru/auto-author-assign@v3.1.0

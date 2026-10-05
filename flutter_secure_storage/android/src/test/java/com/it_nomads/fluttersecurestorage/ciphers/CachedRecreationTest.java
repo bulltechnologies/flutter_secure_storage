@@ -88,6 +88,40 @@ public class CachedRecreationTest {
     private static byte[] bytes(String value) { return value.getBytes(StandardCharsets.UTF_8); }
 
     @Test public void cachedDeleteAndRecreateCannotLoseAcknowledgedBytes() throws Exception {
+        exerciseCachedRecreation(false);
+    }
+
+    @Test public void asyncDispatchPreservesDeletionAndRecreationGuarantees() throws Exception {
+        exerciseCachedRecreation(true);
+    }
+
+    private static void write(FlutterSecureStorage storage, String key, String value, boolean async) throws Exception {
+        if (!async) { storage.write(key, value); return; }
+        final Exception[] error = {null};
+        final boolean[] completed = {false};
+        storage.write(key, value, new SecurePreferencesCallback<Void>() {
+            public void onSuccess(Void ignored) { completed[0] = true; }
+            public void onError(Exception failure) { error[0] = failure; completed[0] = true; }
+        });
+        assertTrue("Ordinary writes must complete without an authentication prompt", completed[0]);
+        if (error[0] != null) throw error[0];
+    }
+
+    private static String read(FlutterSecureStorage storage, String key, boolean async) throws Exception {
+        if (!async) return storage.read(key);
+        final String[] value = {null};
+        final Exception[] error = {null};
+        final boolean[] completed = {false};
+        storage.read(key, new SecurePreferencesCallback<String>() {
+            public void onSuccess(String result) { value[0] = result; completed[0] = true; }
+            public void onError(Exception failure) { error[0] = failure; completed[0] = true; }
+        });
+        assertTrue("Ordinary reads must complete without an authentication prompt", completed[0]);
+        if (error[0] != null) throw error[0];
+        return value[0];
+    }
+
+    private void exerciseCachedRecreation(boolean async) throws Exception {
         Context context = RuntimeEnvironment.getApplication();
         SharedPreferences data = context.getSharedPreferences(FAMILY, Context.MODE_PRIVATE);
         data.edit().clear().commit();
@@ -128,16 +162,16 @@ public class CachedRecreationTest {
         assertTrue("Actual initialize must take its cached path", cached[0]);
         storage.delete(A);
         assertFalse(data.contains(A));
-        assertThrows(IllegalStateException.class, () -> storage.write(A, "recreated A"));
+        assertThrows(IllegalStateException.class, () -> write(storage, A, "recreated A", async));
         assertFalse("Rejected recreation stores no replacement bytes", data.contains(A));
         assertTrue(config.contains(MigrationArtifacts.DELETED_PREFIX + A));
 
         factory.failCleanup = false;
-        storage.write(A, "recreated A");
+        write(storage, A, "recreated A", async);
         assertFalse(config.contains(MigrationArtifacts.MANIFEST));
         assertFalse(config.contains(MigrationArtifacts.DELETED_PREFIX + A));
-        assertEquals("recreated A", storage.read(A));
-        assertEquals("sibling B", storage.read(B));
+        assertEquals("recreated A", read(storage, A, async));
+        assertEquals("sibling B", read(storage, B, async));
         StorageCipher reopened = factory.forGeneration(context, KeyCipherAlgorithm.fromString(TARGET_KEY),
                 StorageCipherAlgorithm.fromString(DATA), config.getString(MigrationArtifacts.ACTIVE_GENERATION, null), false);
         assertEquals("recreated A", new String(reopened.decrypt(Base64.decode(data.getString(A, null), Base64.DEFAULT)), StandardCharsets.UTF_8));

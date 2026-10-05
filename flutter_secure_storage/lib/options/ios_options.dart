@@ -32,6 +32,6 @@ class IOSOptions extends AppleOptions {
 
   @override
   Map<String, String> toMap() => <String, String>{
-        ...super.toMap(),
-      };
+    ...super.toMap(),
+  };
 }

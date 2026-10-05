@@ -51,13 +51,13 @@ public class FlutterSecureStorageConfigTest {
     }
 
     @Test
-    public void defaults_encryptedSharedPreferences_isFalse() {
-        assertFalse(emptyConfig().isUseEncryptedSharedPreferences());
+    public void defaults_enforceBiometrics_isFalse() {
+        assertFalse(emptyConfig().getEnforceBiometrics());
     }
 
     @Test
-    public void defaults_enforceBiometrics_isFalse() {
-        assertFalse(emptyConfig().getEnforceBiometrics());
+    public void defaults_requireBiometricsPerOperation_isFalse() {
+        assertFalse(emptyConfig().getRequireBiometricsPerOperation());
     }
 
     @Test
@@ -117,15 +117,15 @@ public class FlutterSecureStorageConfigTest {
     }
 
     @Test
-    public void custom_encryptedSharedPreferences_true() {
-        FlutterSecureStorageConfig config = configFrom(FlutterSecureStorageConfig.PREF_OPTION_ENCRYPTED_SHARED_PREFERENCES, "true");
-        assertTrue(config.isUseEncryptedSharedPreferences());
-    }
-
-    @Test
     public void custom_enforceBiometrics_true() {
         FlutterSecureStorageConfig config = configFrom(FlutterSecureStorageConfig.PREF_OPTION_ENFORCE_BIOMETRICS, "true");
         assertTrue(config.getEnforceBiometrics());
+    }
+
+    @Test
+    public void custom_requireBiometricsPerOperation_true() {
+        FlutterSecureStorageConfig config = configFrom(FlutterSecureStorageConfig.PREF_OPTION_REQUIRE_BIOMETRICS_PER_OPERATION, "true");
+        assertTrue(config.getRequireBiometricsPerOperation());
     }
 
     @Test
@@ -177,8 +177,8 @@ public class FlutterSecureStorageConfigTest {
 
     @Test
     public void custom_storageCipherAlgorithm() {
-        FlutterSecureStorageConfig config = configFrom(FlutterSecureStorageConfig.PREF_OPTION_STORAGE_CIPHER_ALGORITHM, "AES_CBC_PKCS7Padding");
-        assertEquals("AES_CBC_PKCS7Padding", config.getPrefOptionStorageCipherAlgorithm());
+        FlutterSecureStorageConfig config = configFrom(FlutterSecureStorageConfig.PREF_OPTION_STORAGE_CIPHER_ALGORITHM, "AES_GCM_NoPadding");
+        assertEquals("AES_GCM_NoPadding", config.getPrefOptionStorageCipherAlgorithm());
     }
 
     @Test
@@ -292,6 +292,12 @@ public class FlutterSecureStorageConfigTest {
         assertTrue(config.toString().contains("enforceBiometrics=true"));
     }
 
+    @Test
+    public void toString_containsRequireBiometricsPerOperation() {
+        FlutterSecureStorageConfig config = configFrom(FlutterSecureStorageConfig.PREF_OPTION_REQUIRE_BIOMETRICS_PER_OPERATION, "true");
+        assertTrue(config.toString().contains("requireBiometricsPerOperation=true"));
+    }
+
     // -------------------------------------------------------------------------
     // storageNamespace
     // -------------------------------------------------------------------------
@@ -366,6 +372,23 @@ public class FlutterSecureStorageConfigTest {
     @Test
     public void getKeyAliasSuffix_withoutNamespace() {
         assertEquals("", emptyConfig().getKeyAliasSuffix());
+    }
+
+    // -------------------------------------------------------------------------
+    // isBiometricConfirmationRequired
+    // -------------------------------------------------------------------------
+
+    @Test
+    public void defaults_isBiometricConfirmationRequired_isTrue() {
+        assertTrue(emptyConfig().isBiometricConfirmationRequired());
+    }
+
+    @Test
+    public void custom_isBiometricConfirmationRequired_false() {
+        FlutterSecureStorageConfig config = configFrom(
+            FlutterSecureStorageConfig.PREF_OPTION_BIOMETRIC_CONFIRMATION_REQUIRED, "false"
+        );
+        assertFalse(config.isBiometricConfirmationRequired());
     }
 
     // -------------------------------------------------------------------------

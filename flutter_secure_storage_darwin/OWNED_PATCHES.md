@@ -1,7 +1,10 @@
 # Index owned secure storage (Darwin)
 
-Vendored from `flutter_secure_storage_darwin` 0.3.2 as resolved by the app's
-lockfile, archive SHA-256
+The public fork now uses upstream `flutter_secure_storage_darwin` 0.4.3 with
+preservation-safe upserts and matching-only update queries. See
+[INDEX_FORK.md](../INDEX_FORK.md) for the full baseline and verification.
+
+The original preservation patch was vendored from 0.3.2, archive SHA-256
 `82329fa5cdf343773b1b6897dea959105a29f092454259edff92f9f6637e8149`.
 The upstream license is retained in `LICENSE`; the package identity, public
 Dart API, Keychain service/account identities and authentication policies stay
@@ -20,6 +23,13 @@ the prior item. Proven absence, including an item disappearing between presence
 and update, permits `SecItemAdd`; add failure propagates. There is no ordinary
 delete-and-add fallback. Existing enclave branches and access-control options
 are retained.
+
+`KeychainUpsert.matchingQueryForUpdate` removes result-request flags at every
+update call. `tests/keychain_update_query_test.swift` links the actual storage
+engine and intercepts its update/add symbols, proving the production query omits
+those flags while retaining identity, protection and authentication context.
+The previous native engine fails this test. A separate isolated physical iPhone
+probe confirmed successful in-place updates with unchanged persistent references.
 
 Host verification commands, from the app repository:
 

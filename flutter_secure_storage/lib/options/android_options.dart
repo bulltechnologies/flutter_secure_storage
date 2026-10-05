@@ -5,14 +5,7 @@ part of '../flutter_secure_storage.dart';
 
 /// Algorithm used to encrypt/wrap the secret key in Android KeyStore.
 enum KeyCipherAlgorithm {
-  /// Legacy RSA/ECB/PKCS1Padding for backwards compatibility.
-  ///
-  /// PKCS#1 v1.5 padding is vulnerable to padding-oracle attacks.
-  /// Existing data will be automatically migrated to the default algorithm
-  /// on first access when `migrateOnAlgorithmChange` is true (the default).
-  @Deprecated('RSA PKCS#1 v1.5 padding is insecure. '
-      'Use the default RSA_ECB_OAEPwithSHA_256andMGF1Padding instead. '
-      'Existing data is migrated automatically.')
+  /// Legacy reader retained by the Index fork for existing storage migration.
   RSA_ECB_PKCS1Padding,
 
   /// RSA/ECB/OAEPWithSHA-256AndMGF1Padding (default, API 23+).
@@ -24,16 +17,7 @@ enum KeyCipherAlgorithm {
 
 /// Algorithm used to encrypt stored data.
 enum StorageCipherAlgorithm {
-  /// Legacy AES/CBC/PKCS7Padding for backwards compatibility.
-  ///
-  /// CBC mode is vulnerable to padding-oracle attacks and does not provide
-  /// authentication. Existing data will be automatically migrated to the
-  /// default algorithm on first access when `migrateOnAlgorithmChange` is
-  /// true (the default).
-  @Deprecated(
-      'AES-CBC is insecure (no authentication, padding-oracle vulnerable). '
-      'Use the default AES_GCM_NoPadding instead. '
-      'Existing data is migrated automatically.')
+  /// Legacy reader retained by the Index fork for existing storage migration.
   AES_CBC_PKCS7Padding,
 
   /// AES/GCM/NoPadding (default, API 23+).
@@ -65,46 +49,40 @@ class AndroidOptions extends Options {
   ///
   /// For biometric authentication, use `AndroidOptions.biometric()`.
   ///
-  /// Advanced users can customize cipher algorithms for specific use cases.
-  /// Valid combinations:
-  /// - AES_CBC_PKCS7Padding storage + any key cipher
+  /// Advanced users can customize cipher algorithms for specific use cases:
   /// - AES_GCM_NoPadding storage + RSA key ciphers (standard RSA wrapping)
   /// - AES_GCM_NoPadding storage + AES_GCM_NoPadding key
   ///   (KeyStore-based, supports biometrics)
   const AndroidOptions({
-    @Deprecated('EncryptedSharedPreferences is deprecated and will be '
-        'removed in v11. The Jetpack Security library is deprecated by Google. '
-        'Your data will be automatically migrated to custom ciphers on first '
-        'access. Remove this parameter - it will be ignored.')
     bool encryptedSharedPreferences = false,
     bool resetOnError = true,
     bool migrateOnAlgorithmChange = true,
     bool migrateWithBackup = false,
     bool enforceBiometrics = false,
+    bool requireBiometricsPerOperation = false,
     KeyCipherAlgorithm keyCipherAlgorithm =
         KeyCipherAlgorithm.RSA_ECB_OAEPwithSHA_256andMGF1Padding,
     StorageCipherAlgorithm storageCipherAlgorithm =
         StorageCipherAlgorithm.AES_GCM_NoPadding,
     AndroidBiometricType biometricType =
         AndroidBiometricType.biometricOrDeviceCredential,
-    @Deprecated(
-        'Use storageNamespace instead. sharedPreferencesName only isolates '
-        'data storage; storageNamespace provides full isolation including '
-        'KeyStore aliases and key storage.')
+    bool requireBiometricConfirmation = true,
     this.sharedPreferencesName,
     this.preferencesKeyPrefix,
     this.storageNamespace,
     this.biometricPromptTitle,
     this.biometricPromptSubtitle,
     this.biometricPromptNegativeButton,
-  })  : _encryptedSharedPreferences = encryptedSharedPreferences,
-        _resetOnError = resetOnError,
-        _migrateOnAlgorithmChange = migrateOnAlgorithmChange,
-        _migrateWithBackup = migrateWithBackup,
-        _enforceBiometrics = enforceBiometrics,
-        _keyCipherAlgorithm = keyCipherAlgorithm,
-        _storageCipherAlgorithm = storageCipherAlgorithm,
-        _biometricType = biometricType;
+  }) : _encryptedSharedPreferences = encryptedSharedPreferences,
+       _resetOnError = resetOnError,
+       _migrateOnAlgorithmChange = migrateOnAlgorithmChange,
+       _migrateWithBackup = migrateWithBackup,
+       _enforceBiometrics = enforceBiometrics,
+       _requireBiometricsPerOperation = requireBiometricsPerOperation,
+       _keyCipherAlgorithm = keyCipherAlgorithm,
+       _storageCipherAlgorithm = storageCipherAlgorithm,
+       _biometricType = biometricType,
+       _requireBiometricConfirmation = requireBiometricConfirmation;
 
   /// Maximum security storage with optional biometric authentication.
   /// - Optionally requires biometric authentication
@@ -115,38 +93,39 @@ class AndroidOptions extends Options {
   /// - When enforceBiometrics=false, gracefully degrades if biometrics
   ///   unavailable
   const AndroidOptions.biometric({
-    @Deprecated(
-        'EncryptedSharedPreferences is deprecated and will be removed in v11. '
-        'The Jetpack Security library is deprecated by Google. '
-        'Remove this parameter - it will be ignored.')
     bool encryptedSharedPreferences = false,
     bool resetOnError = true,
     bool migrateOnAlgorithmChange = true,
     bool migrateWithBackup = false,
     bool enforceBiometrics = false,
+    bool requireBiometricsPerOperation = false,
     AndroidBiometricType biometricType =
         AndroidBiometricType.biometricOrDeviceCredential,
-    @Deprecated(
-        'Use storageNamespace instead. sharedPreferencesName only isolates '
-        'data storage; storageNamespace provides full isolation including '
-        'KeyStore aliases and key storage.')
+    bool requireBiometricConfirmation = true,
     this.sharedPreferencesName,
     this.preferencesKeyPrefix,
     this.storageNamespace,
     this.biometricPromptTitle,
     this.biometricPromptSubtitle,
     this.biometricPromptNegativeButton,
-  })  : _encryptedSharedPreferences = encryptedSharedPreferences,
-        _resetOnError = resetOnError,
-        _migrateOnAlgorithmChange = migrateOnAlgorithmChange,
-        _migrateWithBackup = migrateWithBackup,
-        _enforceBiometrics = enforceBiometrics,
-        _keyCipherAlgorithm = KeyCipherAlgorithm.AES_GCM_NoPadding,
-        _storageCipherAlgorithm = StorageCipherAlgorithm.AES_GCM_NoPadding,
-        _biometricType = biometricType;
+  }) : _encryptedSharedPreferences = encryptedSharedPreferences,
+       _resetOnError = resetOnError,
+       _migrateOnAlgorithmChange = migrateOnAlgorithmChange,
+       _migrateWithBackup = migrateWithBackup,
+       _enforceBiometrics = enforceBiometrics,
+       _requireBiometricsPerOperation = requireBiometricsPerOperation,
+       _keyCipherAlgorithm = KeyCipherAlgorithm.AES_GCM_NoPadding,
+       _storageCipherAlgorithm = StorageCipherAlgorithm.AES_GCM_NoPadding,
+       _biometricType = biometricType,
+       _requireBiometricConfirmation = requireBiometricConfirmation;
 
-  /// EncryptedSharedPrefences are only available on API 23 and greater
+  /// Legacy backend selection retained for recovery and retirement of existing
+  /// stores. New stores should use the default custom cipher backend.
   final bool _encryptedSharedPreferences;
+
+  /// Legacy data-file name retained for existing store identities. Use
+  /// [storageNamespace] for new stores, which also isolates their keys.
+  final String? sharedPreferencesName;
 
   /// When an error is detected, automatically reset all data. This will prevent
   /// fatal errors regarding an unknown key however keep in mind that it will
@@ -187,30 +166,45 @@ class AndroidOptions extends Options {
   /// Defaults to false.
   final bool _enforceBiometrics;
 
+  /// Whether a fresh biometric/PIN authentication is required for every
+  /// `read`/`readAll`/`write` call, instead of only the first one.
+  ///
+  /// By default, once the app key has been unlocked (on the first call after
+  /// the app starts), it is kept in memory and reused for later calls
+  /// without prompting again. Setting this to `true` disables that reuse:
+  /// the app key is decrypted fresh for each call and never cached, so a
+  /// biometric prompt appears every time.
+  ///
+  /// Only takes effect when biometric authentication is actually active
+  /// (i.e. combined with `AndroidOptions.biometric()` on a device that has
+  /// biometrics/device credentials enrolled); otherwise this is a no-op.
+  ///
+  /// Defaults to false.
+  final bool _requireBiometricsPerOperation;
+
   /// Algorithm used to encrypt the secret key.
   /// By default RSA/ECB/OAEPWithSHA-256AndMGF1Padding is used (API 23+).
-  /// Legacy RSA/ECB/PKCS1Padding is available for backwards compatibility.
   final KeyCipherAlgorithm _keyCipherAlgorithm;
 
   /// Algorithm used to encrypt stored data.
   /// By default AES/GCM/NoPadding is used (API 23+).
-  /// Legacy AES/CBC/PKCS7Padding is available for backwards compatibility.
   final StorageCipherAlgorithm _storageCipherAlgorithm;
 
   /// Controls which authentication methods are accepted during biometric
   /// prompts.
   final AndroidBiometricType _biometricType;
 
-  /// The name of the sharedPreference database to use.
-  /// You can select your own name if you want. A default name will
-  /// be used if nothing is provided here.
+  /// Whether the user must press an explicit confirmation button after
+  /// passive biometric authentication (e.g. face recognition) succeeds.
   ///
-  /// WARNING: If you change this you can't retrieve already saved preferences.
-  @Deprecated(
-      'Use storageNamespace instead. sharedPreferencesName only isolates '
-      'data storage; storageNamespace provides full isolation including '
-      'KeyStore aliases and key storage.')
-  final String? sharedPreferencesName;
+  /// When `false`, passive biometrics can authenticate without requiring
+  /// an additional button press, enabling lower-friction implicit flows.
+  /// See [setConfirmationRequired](https://developer.android.com/identity/sign-in/biometric-auth#no-explicit-user-action).
+  ///
+  /// Only takes effect on Android 10 (API 29) and higher.
+  ///
+  /// Defaults to true.
+  final bool _requireBiometricConfirmation;
 
   /// The prefix for a shared preference key. The prefix is used to make sure
   /// the key is unique to your application. An underscore (_) is added to the
@@ -234,7 +228,8 @@ class AndroidOptions extends Options {
   /// This allows multiple `FlutterSecureStorage` instances to use different
   /// cipher algorithms without conflicting KeyStore entries or key storage.
   ///
-  /// Prefer this over `sharedPreferencesName` for new code.
+  /// Prefer this over the legacy `sharedPreferencesName` (removed in v11)
+  /// for namespace isolation.
   final String? storageNamespace;
 
   /// The title shown in the biometric authentication prompt.
@@ -255,70 +250,65 @@ class AndroidOptions extends Options {
 
   @override
   Map<String, String> toMap() => <String, String>{
-        'encryptedSharedPreferences': '$_encryptedSharedPreferences',
-        'resetOnError': '$_resetOnError',
-        'migrateOnAlgorithmChange': '$_migrateOnAlgorithmChange',
-        'migrateWithBackup': '$_migrateWithBackup',
-        'enforceBiometrics': '$_enforceBiometrics',
-        'keyCipherAlgorithm': _keyCipherAlgorithm.name,
-        'storageCipherAlgorithm': _storageCipherAlgorithm.name,
-        'biometricType': _biometricType.name,
-        // ignore: deprecated_member_use_from_same_package — legacy support
-        'sharedPreferencesName': sharedPreferencesName ?? '',
-        'preferencesKeyPrefix': preferencesKeyPrefix ?? '',
-        'storageNamespace': storageNamespace ?? '',
-        'biometricPromptTitle':
-            biometricPromptTitle ?? 'Authenticate to access',
-        'biometricPromptSubtitle':
-            biometricPromptSubtitle ?? 'Use biometrics or device credentials',
-        'biometricPromptNegativeButton':
-            biometricPromptNegativeButton ?? 'Cancel',
-      };
+    if (_encryptedSharedPreferences) 'encryptedSharedPreferences': 'true',
+    'sharedPreferencesName': ?sharedPreferencesName,
+    'resetOnError': '$_resetOnError',
+    'migrateOnAlgorithmChange': '$_migrateOnAlgorithmChange',
+    'migrateWithBackup': '$_migrateWithBackup',
+    'enforceBiometrics': '$_enforceBiometrics',
+    'requireBiometricsPerOperation': '$_requireBiometricsPerOperation',
+    'keyCipherAlgorithm': _keyCipherAlgorithm.name,
+    'storageCipherAlgorithm': _storageCipherAlgorithm.name,
+    'biometricType': _biometricType.name,
+    'requireBiometricConfirmation': '$_requireBiometricConfirmation',
+    'preferencesKeyPrefix': preferencesKeyPrefix ?? '',
+    'storageNamespace': storageNamespace ?? '',
+    'biometricPromptTitle': biometricPromptTitle ?? 'Authenticate to access',
+    'biometricPromptSubtitle':
+        biometricPromptSubtitle ?? 'Use biometrics or device credentials',
+    'biometricPromptNegativeButton': biometricPromptNegativeButton ?? 'Cancel',
+  };
 
   /// Creates a copy of this AndroidOptions with the given fields replaced.
   AndroidOptions copyWith({
     bool? encryptedSharedPreferences,
+    String? sharedPreferencesName,
     bool? resetOnError,
     bool? migrateOnAlgorithmChange,
     bool? migrateWithBackup,
     bool? enforceBiometrics,
+    bool? requireBiometricsPerOperation,
     KeyCipherAlgorithm? keyCipherAlgorithm,
     StorageCipherAlgorithm? storageCipherAlgorithm,
     AndroidBiometricType? biometricType,
+    bool? requireBiometricConfirmation,
     String? preferencesKeyPrefix,
-    @Deprecated(
-        'Use storageNamespace instead. sharedPreferencesName only isolates '
-        'data storage; storageNamespace provides full isolation including '
-        'KeyStore aliases and key storage.')
-    String? sharedPreferencesName,
     String? storageNamespace,
     String? biometricPromptTitle,
     String? biometricPromptSubtitle,
     String? biometricPromptNegativeButton,
-  }) =>
-      AndroidOptions(
-        // ignore: deprecated_member_use_from_same_package — will be removed in v11
-        encryptedSharedPreferences:
-            encryptedSharedPreferences ?? _encryptedSharedPreferences,
-        resetOnError: resetOnError ?? _resetOnError,
-        migrateOnAlgorithmChange:
-            migrateOnAlgorithmChange ?? _migrateOnAlgorithmChange,
-        migrateWithBackup: migrateWithBackup ?? _migrateWithBackup,
-        enforceBiometrics: enforceBiometrics ?? _enforceBiometrics,
-        keyCipherAlgorithm: keyCipherAlgorithm ?? _keyCipherAlgorithm,
-        storageCipherAlgorithm:
-            storageCipherAlgorithm ?? _storageCipherAlgorithm,
-        biometricType: biometricType ?? _biometricType,
-        // ignore: deprecated_member_use_from_same_package — legacy support
-        sharedPreferencesName:
-            // ignore: deprecated_member_use_from_same_package — legacy support
-            sharedPreferencesName ?? this.sharedPreferencesName,
-        preferencesKeyPrefix: preferencesKeyPrefix ?? this.preferencesKeyPrefix,
-        storageNamespace: storageNamespace ?? this.storageNamespace,
-        biometricPromptTitle: biometricPromptTitle ?? this.biometricPromptTitle,
-        biometricPromptSubtitle:
-            biometricPromptSubtitle ?? this.biometricPromptSubtitle,
-        biometricPromptNegativeButton:
-            biometricPromptNegativeButton ?? this.biometricPromptNegativeButton,
-      );
+  }) => AndroidOptions(
+    encryptedSharedPreferences:
+        encryptedSharedPreferences ?? _encryptedSharedPreferences,
+    sharedPreferencesName: sharedPreferencesName ?? this.sharedPreferencesName,
+    resetOnError: resetOnError ?? _resetOnError,
+    migrateOnAlgorithmChange:
+        migrateOnAlgorithmChange ?? _migrateOnAlgorithmChange,
+    migrateWithBackup: migrateWithBackup ?? _migrateWithBackup,
+    enforceBiometrics: enforceBiometrics ?? _enforceBiometrics,
+    requireBiometricsPerOperation:
+        requireBiometricsPerOperation ?? _requireBiometricsPerOperation,
+    keyCipherAlgorithm: keyCipherAlgorithm ?? _keyCipherAlgorithm,
+    storageCipherAlgorithm: storageCipherAlgorithm ?? _storageCipherAlgorithm,
+    biometricType: biometricType ?? _biometricType,
+    requireBiometricConfirmation:
+        requireBiometricConfirmation ?? _requireBiometricConfirmation,
+    preferencesKeyPrefix: preferencesKeyPrefix ?? this.preferencesKeyPrefix,
+    storageNamespace: storageNamespace ?? this.storageNamespace,
+    biometricPromptTitle: biometricPromptTitle ?? this.biometricPromptTitle,
+    biometricPromptSubtitle:
+        biometricPromptSubtitle ?? this.biometricPromptSubtitle,
+    biometricPromptNegativeButton:
+        biometricPromptNegativeButton ?? this.biometricPromptNegativeButton,
+  );
 }

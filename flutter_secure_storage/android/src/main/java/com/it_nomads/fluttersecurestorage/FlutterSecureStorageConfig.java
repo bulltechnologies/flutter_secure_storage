@@ -20,6 +20,8 @@ public class FlutterSecureStorageConfig {
     private static final Boolean DEFAULT_MIGRATE_WITH_BACKUP = false;
     private static final Boolean DEFAULT_ENCRYPTED_SHARED_PREFERENCES = false;
     private static final Boolean DEFAULT_ENFORCE_BIOMETRICS = false;
+    private static final Boolean DEFAULT_REQUIRE_BIOMETRICS_PER_OPERATION = false;
+    private static final Boolean DEFAULT_BIOMETRIC_CONFIRMATION_REQUIRED = true;
     private static final String DEFAULT_BIOMETRIC_TYPE = BIOMETRIC_TYPE_DEVICE_CREDENTIAL;
     private static final String DEFAULT_BIOMETRIC_PROMPT_TITLE = "Authenticate to access";
     private static final String DEFAULT_BIOMETRIC_PROMPT_SUBTITLE = "Use biometrics or device credentials";
@@ -34,6 +36,8 @@ public class FlutterSecureStorageConfig {
     public static final String PREF_OPTION_MIGRATE_WITH_BACKUP = "migrateWithBackup";
     public static final String PREF_OPTION_ENCRYPTED_SHARED_PREFERENCES = "encryptedSharedPreferences";
     public static final String PREF_OPTION_ENFORCE_BIOMETRICS = "enforceBiometrics";
+    public static final String PREF_OPTION_REQUIRE_BIOMETRICS_PER_OPERATION = "requireBiometricsPerOperation";
+    public static final String PREF_OPTION_BIOMETRIC_CONFIRMATION_REQUIRED = "requireBiometricConfirmation";
     public static final String PREF_OPTION_BIOMETRIC_TYPE = "biometricType";
     public static final String PREF_OPTION_BIOMETRIC_PROMPT_TITLE = "biometricPromptTitle";
     public static final String PREF_OPTION_BIOMETRIC_PROMPT_SUBTITLE = "biometricPromptSubtitle";
@@ -56,6 +60,8 @@ public class FlutterSecureStorageConfig {
     private final boolean migrateWithBackup;
     private final boolean useEncryptedSharedPreferences;
     private final boolean enforceBiometrics;
+    private final boolean requireBiometricsPerOperation;
+    private final boolean biometricConfirmationRequired;
     private final boolean strongBiometricOnly;
     private final String biometricPromptTitle;
     private final String biometricPromptSubtitle;
@@ -75,6 +81,8 @@ public class FlutterSecureStorageConfig {
         this.migrateWithBackup = getBooleanOption(options, PREF_OPTION_MIGRATE_WITH_BACKUP, DEFAULT_MIGRATE_WITH_BACKUP);
         this.useEncryptedSharedPreferences = getBooleanOption(options, PREF_OPTION_ENCRYPTED_SHARED_PREFERENCES, DEFAULT_ENCRYPTED_SHARED_PREFERENCES);
         this.enforceBiometrics = getBooleanOption(options, PREF_OPTION_ENFORCE_BIOMETRICS, DEFAULT_ENFORCE_BIOMETRICS);
+        this.requireBiometricsPerOperation = getBooleanOption(options, PREF_OPTION_REQUIRE_BIOMETRICS_PER_OPERATION, DEFAULT_REQUIRE_BIOMETRICS_PER_OPERATION);
+        this.biometricConfirmationRequired = getBooleanOption(options, PREF_OPTION_BIOMETRIC_CONFIRMATION_REQUIRED, DEFAULT_BIOMETRIC_CONFIRMATION_REQUIRED);
         String biometricTypeValue = getStringOption(options, PREF_OPTION_BIOMETRIC_TYPE, DEFAULT_BIOMETRIC_TYPE);
         if (!BIOMETRIC_TYPE_STRONG.equals(biometricTypeValue) && !BIOMETRIC_TYPE_DEVICE_CREDENTIAL.equals(biometricTypeValue)) {
             throw new IllegalArgumentException("Unknown biometricType: '" + biometricTypeValue + "'. "
@@ -157,6 +165,8 @@ public class FlutterSecureStorageConfig {
 
     public boolean isUseEncryptedSharedPreferences() { return useEncryptedSharedPreferences; }
     public boolean getEnforceBiometrics() { return enforceBiometrics; }
+    public boolean getRequireBiometricsPerOperation() { return requireBiometricsPerOperation; }
+    public boolean isBiometricConfirmationRequired() { return biometricConfirmationRequired; }
     public boolean isStrongBiometricOnly() { return strongBiometricOnly; }
 
     public String getBiometricPromptTitle() { return biometricPromptTitle; }
@@ -247,6 +257,7 @@ public class FlutterSecureStorageConfig {
                 ", migrateOnAlgorithmChange=" + migrateOnAlgorithmChange +
                 ", migrateWithBackup=" + migrateWithBackup +
                 ", enforceBiometrics=" + enforceBiometrics +
+                ", requireBiometricsPerOperation=" + requireBiometricsPerOperation +
                 ", storageNamespace='" + storageNamespace + '\'' +
                 '}';
     }

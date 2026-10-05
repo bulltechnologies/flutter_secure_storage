@@ -50,10 +50,10 @@ class WebOptions extends Options {
   /// including all web-specific properties.
   @override
   Map<String, String> toMap() => <String, String>{
-        'dbName': dbName,
-        'publicKey': publicKey,
-        'wrapKey': wrapKey,
-        'wrapKeyIv': wrapKeyIv,
-        'useSessionStorage': useSessionStorage.toString(),
-      };
+    'dbName': dbName,
+    'publicKey': publicKey,
+    'wrapKey': wrapKey,
+    'wrapKeyIv': wrapKeyIv,
+    'useSessionStorage': useSessionStorage.toString(),
+  };
 }

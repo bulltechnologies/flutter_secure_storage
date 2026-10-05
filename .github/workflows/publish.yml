@@ -1,5 +1,10 @@
 name: Publish to pub.dev
 
+# release-please tags releases as "<package-directory>-v<version>" (one tag
+# per package, since release-please-config.json has include-component-in-tag
+# set and each package's component name matches its directory name). This
+# extracts the package directory straight from the tag so one workflow can
+# publish any of the six packages.
 on:
   push:
     tags:
@@ -16,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: pub.dev
     permissions:
-      id-token: write
+      id-token: write # Required for pub.dev OIDC authentication.
     steps:
       - uses: actions/checkout@v7
 
@@ -29,7 +34,10 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-      # Fetches the pub.dev OIDC token; flutter-action does not.
+      # subosito/flutter-action never fetches the pub.dev OIDC token itself
+      # (unlike dart-lang/setup-dart), so without this step `flutter pub
+      # publish` silently falls back to interactive OAuth even with
+      # id-token: write granted and trusted publishing configured on pub.dev.
       - uses: dart-lang/setup-dart@v1
 
       - name: Publish ${{ steps.package.outputs.dir }}

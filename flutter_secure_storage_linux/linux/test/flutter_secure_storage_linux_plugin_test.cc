@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
+#include <unistd.h>
+
+#include <cstdlib>
 #include <memory>
+#include <string>
 
 #include "include/Secret.hpp"
 
@@ -150,6 +154,137 @@ TEST_F(SecretStorageTest, StoredValuesAreValidUtf8) {
   EXPECT_EQ(result, value);
   EXPECT_TRUE(isValidUtf8(result));
   EXPECT_TRUE(isValidUtf8(key));
+}
+
+// Provides a path that exists (stand-in for /.flatpak-info) and one that does
+// not, without depending on platform-specific files.
+class ShouldSkipKeyringWarmupTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    char tmpl[] = "/tmp/fss_flatpak_info_XXXXXX";
+    int fd = mkstemp(tmpl);
+    ASSERT_NE(fd, -1);
+    close(fd);
+    existing_path_ = tmpl;
+  }
+
+  void TearDown() override { unlink(existing_path_.c_str()); }
+
+  std::string existing_path_;
+  static constexpr const char* kMissingPath = "/nonexistent/.flatpak-info";
+};
+
+TEST_F(ShouldSkipKeyringWarmupTest, NotSandboxedRunsWarmup) {
+  EXPECT_FALSE(shouldSkipKeyringWarmup(kMissingPath, nullptr, nullptr, false));
+  EXPECT_FALSE(shouldSkipKeyringWarmup(kMissingPath, nullptr, nullptr, true));
+}
+
+TEST_F(ShouldSkipKeyringWarmupTest, SandboxedWithoutServiceSkips) {
+  EXPECT_TRUE(shouldSkipKeyringWarmup(existing_path_.c_str(), nullptr, nullptr,
+                                      false));
+  EXPECT_TRUE(shouldSkipKeyringWarmup(kMissingPath, "my-snap", nullptr, false));
+}
+
+TEST_F(ShouldSkipKeyringWarmupTest, SandboxedWithServiceRunsWarmup) {
+  EXPECT_FALSE(shouldSkipKeyringWarmup(existing_path_.c_str(), nullptr, nullptr,
+                                       true));
+  EXPECT_FALSE(shouldSkipKeyringWarmup(kMissingPath, "my-snap", nullptr, true));
+}
+
+TEST_F(ShouldSkipKeyringWarmupTest, EmptySnapNameIsNotSandboxed) {
+  EXPECT_FALSE(shouldSkipKeyringWarmup(kMissingPath, "", nullptr, false));
+}
+
+TEST_F(ShouldSkipKeyringWarmupTest, SecretBackendFileForcesSkip) {
+  EXPECT_TRUE(shouldSkipKeyringWarmup(kMissingPath, nullptr, "file", true));
+}
+
+TEST_F(ShouldSkipKeyringWarmupTest, SecretBackendServiceForcesWarmup) {
+  EXPECT_FALSE(
+      shouldSkipKeyringWarmup(existing_path_.c_str(), "my-snap", "service",
+                              false));
+}
+
+TEST_F(ShouldSkipKeyringWarmupTest, UnrecognizedSecretBackendFallsBackToDetection) {
+  EXPECT_TRUE(shouldSkipKeyringWarmup(existing_path_.c_str(), nullptr,
+                                      "something-else", false));
+  EXPECT_FALSE(shouldSkipKeyringWarmup(kMissingPath, nullptr, "something-else",
+                                       false));
+}
+
+// Exercises the real D-Bus call against whatever session bus this process is
+// connected to. Skipped unless CI points FSS_EXPECT_SECRET_SERVICE_REACHABLE
+// at a specific bus policy (see the "Verify Secret Service Reachability"
+// steps in ci.yml), since the answer otherwise depends on the environment.
+TEST(SecretServiceOnSessionBusTest, MatchesConfiguredBusPolicy) {
+  const char *expected = g_getenv("FSS_EXPECT_SECRET_SERVICE_REACHABLE");
+  if (expected == nullptr) {
+    GTEST_SKIP() << "set FSS_EXPECT_SECRET_SERVICE_REACHABLE=0|1 to run this "
+                    "against a specific D-Bus policy";
+  }
+  const bool want = std::string(expected) == "1";
+  EXPECT_EQ(secretServiceOnSessionBus(), want);
+}
+
+// setLabel() used to leave the_schema.name pointing at label's old buffer.
+// A short initial label fits small-string optimization; relabeling to
+// something long enough to force a heap allocation used to leave the
+// schema name dangling/stale instead of tracking the new value.
+TEST(SecretStorageSchemaNameTest, SchemaNameTracksLabelAfterRelabel) {
+  SecretStorage storage("x");
+  const std::string long_label(
+      "com.example.somewhat_long_application_id/FlutterSecureStorage");
+
+  storage.setLabel(long_label.c_str());
+
+  EXPECT_STREQ(storage.getSchemaName(), long_label.c_str());
+  EXPECT_STREQ(storage.getSchemaName(), storage.getLabel());
+}
+
+// `legacy_` and `current_` share the same "account" attribute but use
+// different schema names/labels, standing in for an old item stored under
+// a stale schema value versus the current, correct one.
+class SchemaMigrationTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    legacy_ = std::make_unique<SecretStorage>("fss_migration_test.legacy_schema");
+    legacy_->addAttribute("account", "fss_migration_test.secureStorage");
+    legacy_->deleteKeyring();
+
+    current_ = std::make_unique<SecretStorage>("fss_migration_test.current_schema");
+    current_->addAttribute("account", "fss_migration_test.secureStorage");
+    current_->deleteKeyring();
+  }
+
+  void TearDown() override {
+    legacy_->deleteKeyring();
+    current_->deleteKeyring();
+  }
+
+  std::unique_ptr<SecretStorage> legacy_;
+  std::unique_ptr<SecretStorage> current_;
+};
+
+TEST_F(SchemaMigrationTest, LegacyDataUnderDifferentSchemaIsPulledForward) {
+  ASSERT_TRUE(legacy_->addItem("legacy_key", "legacy_value"));
+
+  EXPECT_EQ(current_->getItem("legacy_key"), "legacy_value");
+
+  // Copied forward, not moved: the legacy item is left in place.
+  EXPECT_EQ(legacy_->getItem("legacy_key"), "legacy_value");
+}
+
+TEST_F(SchemaMigrationTest, SkipsMigrationOnceCurrentSchemaHasAnyData) {
+  ASSERT_TRUE(current_->addItem("unrelated", "value"));
+  ASSERT_TRUE(legacy_->addItem("legacy_only_key", "legacy_value"));
+
+  // Migration only runs while the current schema is still completely empty;
+  // once it holds anything, later legacy writes must not appear in it.
+  EXPECT_EQ(current_->getItem("legacy_only_key"), "");
+}
+
+TEST_F(SchemaMigrationTest, NoLegacyDataIsNoOp) {
+  EXPECT_EQ(current_->getItem("missing"), "");
 }
 
 }  // namespace test

@@ -1,3 +1,5 @@
+# Changelog
+
 ## 4.2.2
 Fixed `deleteAll` and `containsKey` not acquiring the mutex lock, which could cause data races under concurrent access.
 

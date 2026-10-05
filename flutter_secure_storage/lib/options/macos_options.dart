@@ -37,7 +37,7 @@ class MacOsOptions extends AppleOptions {
 
   @override
   Map<String, String> toMap() => <String, String>{
-        ...super.toMap(),
-        'usesDataProtectionKeychain': '$usesDataProtectionKeychain',
-      };
+    ...super.toMap(),
+    'usesDataProtectionKeychain': '$usesDataProtectionKeychain',
+  };
 }
