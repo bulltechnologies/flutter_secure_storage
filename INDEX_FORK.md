@@ -65,6 +65,13 @@ from the stock major upgrade:
   report `unknown` without initiating migration or promising data loss.
   It is a preflight diagnostic, not proof that every stored value is valid.
 
+The entry point accepts Windows backend versions from 4.1.0 through 4.x. The
+11.2.0 Dart storage interface remains compatible with 4.1.0; its Windows options
+did not change behavior. This lets an existing mobile host retain a Win32 v5
+dependency graph while other consumers can select the newer Win32 v6 backend.
+Windows 4.2.2 is retained in the fork workspace. A consumer resolving 4.1.0 does
+not receive 4.2.2's backend changes until its other Win32 dependencies are upgraded.
+
 The host must continue using its selected recovery options, including
 `resetOnError: false` and `migrateWithBackup: true` for Index ordinary stores.
 The post-operation Android persistence barrier implemented by the host remains

@@ -8,6 +8,7 @@
 - Include the 11.x asynchronous API and biometric options with owned family guards.
 - Consume Darwin 0.4.3 with in-place update-query correction and item preservation.
 - Add independent fork CI and compatibility/recovery regression tests.
+- Allow compatible Windows 4.x backends so existing mobile Win32 v5 graphs resolve.
 
 ## [11.2.0](https://github.com/juliansteenbakker/flutter_secure_storage/compare/flutter_secure_storage-v11.1.1...flutter_secure_storage-v11.2.0) (2026-09-16)
 
