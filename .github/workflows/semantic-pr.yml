@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   main:
+    if: github.repository == 'juliansteenbakker/flutter_secure_storage'
     name: Validate PR title
     runs-on: ubuntu-latest
     steps:

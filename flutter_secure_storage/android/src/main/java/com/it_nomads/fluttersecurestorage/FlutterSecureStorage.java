@@ -7,6 +7,8 @@ import android.hardware.biometrics.BiometricManager;
 import android.hardware.biometrics.BiometricPrompt;
 import android.os.Build;
 import android.os.CancellationSignal;
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyProperties;
 import android.util.Base64;
 import android.util.Log;
 
@@ -18,9 +20,13 @@ import com.it_nomads.fluttersecurestorage.ciphers.KeyCipherAlgorithm;
 import com.it_nomads.fluttersecurestorage.ciphers.LegacyNamespaceKeyRecovery;
 import com.it_nomads.fluttersecurestorage.ciphers.StorageCipher;
 import com.it_nomads.fluttersecurestorage.ciphers.StorageCipherFactory;
+import com.it_nomads.fluttersecurestorage.crypto.EncryptedSharedPreferences;
+import com.it_nomads.fluttersecurestorage.crypto.MasterKey;
 
+import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.Executor;
@@ -39,6 +45,7 @@ public class FlutterSecureStorage {
     private SharedPreferences preferences;
     private StorageCipher storageCipher;
     private StorageCipherFactory storageCipherFactory;
+    private long familyEpoch = -1;
 
     public FlutterSecureStorage(Context context) {
         this.context = context.getApplicationContext();
@@ -50,6 +57,95 @@ public class FlutterSecureStorage {
 
     public boolean containsKey(String key) {
         return preferences.contains(key);
+    }
+
+    public String read(String key) throws Exception {
+        try {
+            return readUnsafe(storageCipher, key);
+        } catch (Exception e) {
+            if (handleStorageError("read", key, e)) {
+                return readUnsafe(storageCipher, key); // Retry after deleting corrupted data
+            }
+            throw e;
+        }
+    }
+
+    private String readUnsafe(StorageCipher cipher, String key) throws Exception {
+        String rawValue = preferences.getString(key, null);
+        if (config.isUseEncryptedSharedPreferences() && !config.shouldMigrateOnAlgorithmChange()) {
+            return rawValue;
+        }
+        return decodeRawValue(cipher, rawValue);
+    }
+
+    public Map<String, String> readAll() throws Exception {
+        try {
+            return readAllUnsafe(storageCipher);
+        } catch (Exception e) {
+            if (handleStorageError("readAll", null, e)) {
+                return readAllUnsafe(storageCipher); // Retry after deleting corrupted data
+            }
+            throw e;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, String> readAllUnsafe(StorageCipher cipher) throws Exception {
+        Map<String, String> raw = (Map<String, String>) preferences.getAll();
+
+        Map<String, String> all = new HashMap<>();
+        for (Map.Entry<String, String> entry : raw.entrySet()) {
+            String keyWithPrefix = entry.getKey();
+            if (keyWithPrefix.startsWith(config.getSharedPreferencesKeyPrefix() + "_")) {
+                String key = keyWithPrefix.substring(config.getSharedPreferencesKeyPrefix().length() + 1);
+                if (config.isUseEncryptedSharedPreferences() && !config.shouldMigrateOnAlgorithmChange()) {
+                    all.put(key, entry.getValue());
+                } else {
+                    String rawValue = entry.getValue();
+                    String value = decodeRawValue(cipher, rawValue);
+
+                    all.put(key, value);
+                }
+            }
+        }
+        return all;
+    }
+
+    public void write(String key, String value) throws Exception {
+        try {
+            writeUnsafe(storageCipher, key, value);
+        } catch (Exception e) {
+            if (handleStorageError("write", key, e)) {
+                writeUnsafe(storageCipher, key, value); // Retry after deleting corrupted data
+            } else {
+                throw e;
+            }
+        }
+    }
+
+    private void writeUnsafe(StorageCipher cipher, String key, String value) throws Exception {
+        NamespacedConfigSource authority = new NamespacedConfigSource(context, config.getEffectiveDataPrefsName());
+        // Failed cleanup may have removed journal/intent fields in RAM only.
+        // Their apparent absence cannot authorize an acknowledged recreation.
+        authority.commit(authority.edit());
+        if (authority.contains(MigrationArtifacts.MANIFEST)
+                && authority.contains(MigrationArtifacts.DELETED_PREFIX + key)) {
+            StorageCipher recovered = ordinaryMigration(authority, preferences).beforeWrite(key);
+            if (recovered != null) {
+                storageCipher = recovered;
+                cipher = recovered;
+                config = config.forRootGeneration(authority.getString(MigrationArtifacts.ACTIVE_GENERATION, null), false);
+            }
+        }
+        SharedPreferences.Editor editor = preferences.edit();
+
+        if (config.isUseEncryptedSharedPreferences() && !config.shouldMigrateOnAlgorithmChange()) {
+            editor.putString(key, value);
+        } else {
+            byte[] result = cipher.encrypt(value.getBytes(charset));
+            editor.putString(key, Base64.encodeToString(result, 0));
+        }
+        CheckedPreferences.commit(preferences, editor);
     }
 
     public void read(String key, SecurePreferencesCallback<String> callback) {
@@ -78,11 +174,6 @@ public class FlutterSecureStorage {
         });
     }
 
-    private String readUnsafe(StorageCipher cipher, String key) throws Exception {
-        String rawValue = preferences.getString(key, null);
-        return decodeRawValue(cipher, rawValue);
-    }
-
     public void readAll(SecurePreferencesCallback<Map<String, String>> callback) {
         withStorageCipher(new SecurePreferencesCallback<>() {
             @Override
@@ -107,22 +198,6 @@ public class FlutterSecureStorage {
                 callback.onError(e);
             }
         });
-    }
-
-    @SuppressWarnings("unchecked")
-    private Map<String, String> readAllUnsafe(StorageCipher cipher) throws Exception {
-        Map<String, String> raw = (Map<String, String>) preferences.getAll();
-
-        Map<String, String> all = new HashMap<>();
-        for (Map.Entry<String, String> entry : raw.entrySet()) {
-            String keyWithPrefix = entry.getKey();
-            if (keyWithPrefix.contains(config.getSharedPreferencesKeyPrefix())) {
-                String key = entry.getKey().replaceFirst(config.getSharedPreferencesKeyPrefix() + '_', "");
-                String value = decodeRawValue(cipher, entry.getValue());
-                all.put(key, value);
-            }
-        }
-        return all;
     }
 
     public void write(String key, String value, SecurePreferencesCallback<Void> callback) {
@@ -153,27 +228,11 @@ public class FlutterSecureStorage {
         });
     }
 
-    private void writeUnsafe(StorageCipher cipher, String key, String value) throws Exception {
-        SharedPreferences.Editor editor = preferences.edit();
-        byte[] result = cipher.encrypt(value.getBytes(charset));
-        editor.putString(key, Base64.encodeToString(result, 0));
-        editor.apply();
-    }
-
-    /**
-     * Supplies the {@link StorageCipher} to use for one read/write/readAll call.
-     * <p>
-     * When {@code requireBiometricsPerOperation} is off (the common case), this is the
-     * cached {@link #storageCipher} field, unlocked once at {@link #initialize}. When it's
-     * on for a biometric-protected store, {@link #storageCipher} is intentionally left
-     * null (see {@link #initializeStorageCipher}), so a fresh cipher is authenticated and
-     * derived here instead, then discarded once the caller is done with it.
-     */
-    private void withStorageCipher(SecurePreferencesCallback<StorageCipher> callback) {
-        withStorageCipher(callback, false);
-    }
-
     private void withStorageCipher(SecurePreferencesCallback<StorageCipher> callback, boolean isRetryAfterRecovery) {
+        if (config.isUseEncryptedSharedPreferences() && !config.shouldMigrateOnAlgorithmChange()) {
+            callback.onSuccess(null); // The retained ESP backend decrypts its own values.
+            return;
+        }
         if (storageCipher != null) {
             callback.onSuccess(storageCipher);
             return;
@@ -222,78 +281,295 @@ public class FlutterSecureStorage {
         }
     }
 
+    // Authentication completes asynchronously. Hold the same family lock as
+    // synchronous dispatch and reject a cipher from a retired storage epoch.
+    private void withStorageCipher(SecurePreferencesCallback<StorageCipher> callback) {
+        final String operationFamily = config.getEffectiveDataPrefsName();
+        final long operationEpoch = MigrationArtifacts.familyEpoch(operationFamily);
+        withStorageCipher(new SecurePreferencesCallback<>() {
+            @Override public void onSuccess(StorageCipher cipher) {
+                synchronized (MigrationArtifacts.familyLock(operationFamily)) {
+                    if (operationEpoch != MigrationArtifacts.familyEpoch(operationFamily)) {
+                        callback.onError(new IllegalStateException("Storage family changed before operation"));
+                    } else callback.onSuccess(cipher);
+                }
+            }
+            @Override public void onError(Exception error) { callback.onError(error); }
+        }, false);
+    }
+
     public void delete(String key) {
+        NamespacedConfigSource source = new NamespacedConfigSource(context, config.getEffectiveDataPrefsName());
+        MigrationArtifacts.recordKeyDeletion(source.scopedPreferences(), key);
+        String legacyStatus = source.scopedPreferences().getString("FlutterSecureStorageBackupStatus", null);
+        boolean ownedLegacyCopy = MigrationBackup.STATUS_STARTED.equals(legacyStatus)
+                || MigrationBackup.STATUS_COMPLETE.equals(legacyStatus)
+                || MigrationBackup.STATUS_DELETED.equals(legacyStatus)
+                || source.contains(key + "_MIGRATED");
         SharedPreferences.Editor editor = preferences.edit();
         editor.remove(key);
-        editor.apply();
+        if (ownedLegacyCopy) editor.remove(key + "_BACKUP");
+        for (String physical : preferences.getAll().keySet()) {
+            if (MigrationArtifacts.isSourceCopyKeyFor(physical, key)) editor.remove(physical);
+        }
+        CheckedPreferences.commit(preferences, editor);
+        if (ownedLegacyCopy) source.commit(source.edit().remove(key + "_MIGRATED"));
     }
 
     public void deleteAll() {
-        SharedPreferences.Editor editor = preferences.edit();
-        for (String key : preferences.getAll().keySet()) {
-            if (key.contains(config.getSharedPreferencesKeyPrefix())) {
-                editor.remove(key);
+        SharedPreferences data = preferences;
+        // An erase may fail after retiring a wrapping alias. Invalidate before
+        // its first effect, so no later operation can reuse a stale cached key.
+        MigrationArtifacts.invalidateFamily(config.getEffectiveDataPrefsName());
+        preferences = null;
+        storageCipher = null;
+        storageCipherFactory = null;
+        SharedPreferences.Editor editor = data.edit();
+        editor.clear();
+        CheckedPreferences.commit(data, editor);
+        NamespacedConfigSource source = new NamespacedConfigSource(context, config.getEffectiveDataPrefsName());
+        if (config.hasStorageNamespace()) {
+            SharedPreferences roots = context.getSharedPreferences(config.getEffectiveKeyStoragePrefsName(), Context.MODE_PRIVATE);
+            CheckedPreferences.commit(roots, roots.edit().clear());
+            try {
+                java.security.KeyStore keys = java.security.KeyStore.getInstance("AndroidKeyStore");
+                keys.load(null);
+                java.util.List<String> owned = new java.util.ArrayList<>();
+                java.util.Enumeration<String> aliases = keys.aliases();
+                String suffix = "." + config.getStorageNamespace();
+                while (aliases.hasMoreElements()) {
+                    String alias = aliases.nextElement();
+                    if (alias.equals(context.getPackageName() + ".FlutterSecureStoragePluginKey" + suffix)
+                            || alias.equals(context.getPackageName() + ".FlutterSecureStoragePluginKeyOAEP" + suffix)
+                            || MigrationArtifacts.isGenerationAliasFor(alias, context.getPackageName(), config.getStorageNamespace())) owned.add(alias);
+                }
+                for (String alias : owned) keys.deleteEntry(alias);
+                for (String alias : owned) if (keys.containsAlias(alias)) throw new IllegalStateException("Wrapping alias remains");
+            } catch (Exception error) {
+                throw new IllegalStateException("Wrapping alias retirement failed", error);
             }
+            source.commit(source.edit().clear());
+        } else {
+            // The old global wrapping family can be shared by other data names.
+            // Remove this data family's recovery authority, without erasing roots.
+            SharedPreferences.Editor authority = source.edit().remove(MigrationArtifacts.MANIFEST);
+            for (String marker : source.getAll().keySet()) {
+                if (marker.startsWith(MigrationArtifacts.DELETED_PREFIX)) authority.remove(marker);
+            }
+            source.commit(authority);
         }
-        editor.apply();
     }
 
     public void initialize(FlutterSecureStorageConfig config, SecurePreferencesCallback<Void> callback) {
+        long currentEpoch = MigrationArtifacts.familyEpoch(config.getEffectiveDataPrefsName());
+        if (familyEpoch != currentEpoch) {
+            preferences = null;
+            storageCipher = null;
+            storageCipherFactory = null;
+            familyEpoch = currentEpoch;
+        }
         if (preferences != null) {
             callback.onSuccess(null);
             return;
         }
         this.config = config;
+        SecurePreferencesCallback<Void> guarded = new SecurePreferencesCallback<>() {
+            @Override public void onSuccess(Void unused) {
+                synchronized (MigrationArtifacts.familyLock(config.getEffectiveDataPrefsName())) {
+                    if (currentEpoch != MigrationArtifacts.familyEpoch(config.getEffectiveDataPrefsName())) {
+                        callback.onError(new IllegalStateException("Storage family changed during initialization"));
+                    } else callback.onSuccess(null);
+                }
+            }
+            @Override public void onError(Exception error) { callback.onError(error); }
+        };
 
         // A biometric-protected app key needs live authentication to move, unlike the
         // RSA/AES-GCM case below, so it's recovered first as its own async step.
         recoverBiometricNamespaceKeyIfNeeded(config, new SecurePreferencesCallback<>() {
             @Override
             public void onSuccess(Void unused) {
-                continueInitialize(config, callback);
+                synchronized (MigrationArtifacts.familyLock(config.getEffectiveDataPrefsName())) {
+                    if (currentEpoch != MigrationArtifacts.familyEpoch(config.getEffectiveDataPrefsName())) {
+                        guarded.onError(new IllegalStateException("Storage family changed during initialization"));
+                    } else continueInitialize(config, guarded);
+                }
             }
 
             @Override
             public void onError(Exception e) {
-                callback.onError(e);
+                guarded.onError(e);
             }
         });
     }
 
     private void continueInitialize(FlutterSecureStorageConfig config, SecurePreferencesCallback<Void> callback) {
-        SharedPreferences dataPreferences = context.getSharedPreferences(
+        SharedPreferences nonEncryptedPreferences = context.getSharedPreferences(
                 config.getEffectiveDataPrefsName(),
                 Context.MODE_PRIVATE
         );
 
+        // Use namespaced config with legacy fallback for backwards compatibility
         NamespacedConfigSource configSource = new NamespacedConfigSource(context, config.getEffectiveDataPrefsName());
+
+        // A root cannot be created for an apparently empty family containing
+        // opaque or orphaned recovery records. Leave all artifacts untouched.
+        if (config.shouldMigrateWithBackup()) {
+            boolean hasManifest = configSource.contains(MigrationArtifacts.MANIFEST);
+            if (!hasManifest && configSource.contains("FlutterSecureStorageBackupStatus")) {
+                callback.onError(new IllegalStateException("Legacy migration state requires preserved recovery"));
+                return;
+            }
+            if (nonEncryptedPreferences.contains("__androidx_security_crypto_encrypted_prefs_key_keyset__")
+                    || nonEncryptedPreferences.contains("__androidx_security_crypto_encrypted_prefs_value_keyset__")) {
+                callback.onError(new IllegalStateException("Encrypted source identifiers are unavailable"));
+                return;
+            }
+            if (!hasManifest) {
+                for (String physical : nonEncryptedPreferences.getAll().keySet()) {
+                    if (physical.startsWith(MigrationArtifacts.SOURCE_PREFIX)) {
+                        callback.onError(new IllegalStateException("Source copies have no authenticated migration authority"));
+                        return;
+                    }
+                    if (physical.startsWith(config.getSharedPreferencesKeyPrefix() + "_")
+                            && physical.endsWith("_BACKUP")) {
+                        callback.onError(new IllegalStateException("Legacy source inventory is ambiguous"));
+                        return;
+                    }
+                }
+            }
+        }
+
+        String activeGeneration = configSource.getString(MigrationArtifacts.ACTIVE_GENERATION, null);
+        if (activeGeneration != null && !MigrationArtifacts.isGeneration(activeGeneration)) {
+            callback.onError(new IllegalStateException("Unrecognized root authority"));
+            return;
+        }
+        boolean hasData = hasAnyEncryptedData(nonEncryptedPreferences);
+        this.config = config.forRootGeneration(activeGeneration,
+                activeGeneration == null && !hasData && !configSource.contains(MigrationArtifacts.MANIFEST));
 
         // Move the wrapped key if the app switched between sharedPreferencesName
         // and storageNamespace.
-        LegacyNamespaceKeyRecovery.recoverIfNeeded(context, config);
+        if (activeGeneration == null && !configSource.contains(MigrationArtifacts.MANIFEST)) {
+            LegacyNamespaceKeyRecovery.recoverIfNeeded(context, this.config);
+        }
 
-        initializeStorageCipher(configSource, new SecurePreferencesCallback<>() {
-            @Override
-            public void onSuccess(Void unused) {
-                preferences = dataPreferences;
-                callback.onSuccess(null);
-            }
+        Boolean isAlreadyMigrated = getEncryptedPrefsMigrated(configSource);
 
-            @Override
-            public void onError(Exception e) {
-                callback.onError(e);
+        // Skip old ESP migration if migrateWithBackup is enabled - ESP migration is now
+        // handled by step 6 of the backup-protected migration path
+        if (!isAlreadyMigrated && !config.shouldMigrateWithBackup()) {
+            try {
+                SharedPreferences encryptedPreferences = initializeEncryptedSharedPreferencesManager(context);
+
+                // Check if data exists in EncryptedSharedPreferences (from v9.2.4 or earlier)
+                if (hasDataInEncryptedSharedPreferences(encryptedPreferences)) {
+                    // EncryptedSharedPreferences (Jetpack Security library, deprecated by Google)
+                    Log.w(TAG, "Found data in EncryptedSharedPreferences (deprecated)");
+                    Log.w(TAG, "EncryptedSharedPreferences is DEPRECATED and will be removed in a later version");
+                    Log.w(TAG, "The Jetpack Security library has been deprecated by Google.");
+
+                    if (!config.shouldMigrateOnAlgorithmChange()) {
+                        Log.w(TAG, "Data found in EncryptedSharedPreferences, but migrateOnAlgorithmChange is set to false.");
+                        Log.w(TAG, "Set migrateOnAlgorithmChange=true to migrate to custom cipher storage.");
+
+                        // User wants to keep using EncryptedSharedPreferences
+                        if (config.isUseEncryptedSharedPreferences()) {
+                            Log.i(TAG, "Using EncryptedSharedPreferences (migration disabled).");
+                            preferences = encryptedPreferences;
+                            callback.onSuccess(null);
+                            return;
+                        } else {
+                            Log.e(TAG, "Data exists in EncryptedSharedPreferences but encryptedSharedPreferences=false and migrateOnAlgorithmChange=false.");
+                            Log.e(TAG, "Either set encryptedSharedPreferences=true to use the old data, or set migrateOnAlgorithmChange=true to migrate it.");
+                            callback.onError(new Exception("EncryptedSharedPreferences data found but migration is disabled. Set migrateOnAlgorithmChange=true to migrate."));
+                            return;
+                        }
+                    }
+
+                    // Migrate from EncryptedSharedPreferences to custom cipher storage
+                    Log.i(TAG, "Migrating data from EncryptedSharedPreferences to custom cipher storage...");
+                    if (config.isUseEncryptedSharedPreferences()) {
+                        Log.w(TAG, "Your data will be automatically migrated. You can safely remove encryptedSharedPreferences from your config after migration.");
+                    }
+                    Log.i(TAG, "Migrating data from EncryptedSharedPreferences to selected custom cipher storage...");
+
+                    // Initialize custom cipher for migration target
+                    initializeStorageCipher(configSource, new SecurePreferencesCallback<>() {
+                        @Override
+                        public void onSuccess(Void unused) {
+                            try {
+                                migrateFromEncryptedSharedPreferences(encryptedPreferences, nonEncryptedPreferences);
+                                preferences = nonEncryptedPreferences;
+                                Log.i(TAG, "Migration completed successfully. Now using custom cipher storage.");
+                                setEncryptedPrefsMigrated(configSource);
+                                callback.onSuccess(null);
+                            } catch (Exception e) {
+                                Log.e(TAG, "Migration failed. Falling back to EncryptedSharedPreferences.", e);
+                                preferences = encryptedPreferences;
+                                callback.onSuccess(null);
+                            }
+                        }
+
+                        @Override
+                        public void onError(Exception e) {
+                            Log.e(TAG, "Cipher initialization failed during migration. Using EncryptedSharedPreferences.", e);
+                            preferences = encryptedPreferences;
+                            callback.onSuccess(null);
+                        }
+                    });
+                    return;
+                } else {
+                    // No data in EncryptedSharedPreferences
+                    Log.d(TAG, "No data found in EncryptedSharedPreferences.");
+
+                    // If user explicitly wants to use EncryptedSharedPreferences (deprecated)
+                    if (config.isUseEncryptedSharedPreferences() && !config.shouldMigrateOnAlgorithmChange()) {
+                        Log.w(TAG, "Using EncryptedSharedPreferences (deprecated). Consider migrating to custom ciphers.");
+                        preferences = encryptedPreferences;
+                        callback.onSuccess(null);
+                        return;
+                    }
+
+                    // Fall through to use custom ciphers
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "EncryptedSharedPreferences initialization failed. Falling back to custom ciphers.", e);
+                // Fall through to use custom ciphers
             }
-        });
+        }
+
+        // Use custom cipher storage (default path for new installs or after migration)
+        if (preferences == null) {
+            if (config.isUseEncryptedSharedPreferences() && isAlreadyMigrated) {
+                Log.i(TAG, "Data already migrated, encryptedSharedPreferences ignored and can be safely removed.");
+            }
+            initializeStorageCipher(configSource, new SecurePreferencesCallback<>() {
+                @Override
+                public void onSuccess(Void unused) {
+                    preferences = nonEncryptedPreferences;
+                    callback.onSuccess(null);
+                }
+
+                @Override
+                public void onError(Exception e) {
+                    callback.onError(e);
+                }
+            });
+        }
     }
 
     /**
      * Moves the biometric app key to the new namespace/legacy location when the app
      * switched between sharedPreferencesName and storageNamespace, if needed. A no-op
-     * when recovery isn't needed.
+     * (immediate success) when recovery isn't needed - the common case for every app
+     * that isn't using biometric-protected storage.
      * <p>
-     * Unlike the RSA case, the wrapping key lives in the Android Keystore and needs
-     * live authentication, so this takes two BiometricPrompt round trips: one to
-     * decrypt the app key at the old location, one to re-encrypt it at the new one.
+     * Unlike the RSA case, the wrapping key here lives in the Android Keystore and
+     * requires live authentication to use, so this takes two BiometricPrompt round
+     * trips: one to decrypt the app key at the old location, one to re-encrypt it at
+     * the new one.
      */
     private void recoverBiometricNamespaceKeyIfNeeded(FlutterSecureStorageConfig config,
                                                        SecurePreferencesCallback<Void> callback) {
@@ -352,9 +628,27 @@ public class FlutterSecureStorage {
 
     private void initializeStorageCipher(NamespacedConfigSource configSource, SecurePreferencesCallback<Void> callback) {
         try {
+            // v9 wrote the algorithm markers to the data prefs, not the config
+            // prefs; move them over so v9 data isn't read as the v9 defaults.
+            SharedPreferences dataPrefs = context.getSharedPreferences(
+                    config.getEffectiveDataPrefsName(), Context.MODE_PRIVATE);
+            StorageCipherFactory.adoptLegacyMarkers(configSource, dataPrefs);
+
             storageCipherFactory = new StorageCipherFactory(configSource, config.getPrefOptionKeyCipherAlgorithm(), config.getPrefOptionStorageCipherAlgorithm(), config);
 
+            if (configSource.contains(MigrationArtifacts.MANIFEST)) {
+                migrateNonBiometricWithBackup(configSource, dataPrefs, callback);
+                return;
+            }
+
             if (storageCipherFactory.requiresReEncryption()) {
+                if (canSkipMarkerlessMigration()) {
+                    // No markers, and nothing to migrate (fresh install, or the
+                    // data already reads with the current cipher). Use it as is.
+                    storageCipher = storageCipherFactory.getCurrentStorageCipher(context, null);
+                    callback.onSuccess(null);
+                    return;
+                }
                 Log.w(TAG, "Algorithm changed detected.");
                 handleKeyMismatch(configSource, callback, null, "Algorithm changed detected");
                 return;
@@ -381,10 +675,6 @@ public class FlutterSecureStorage {
             }
 
             if (config.getRequireBiometricsPerOperation()) {
-                // Per-operation mode: verify availability now (fail fast if enforced and
-                // unavailable), but don't authenticate or cache a decrypted cipher here.
-                // storageCipher stays null, which signals read/write/readAll to derive
-                // and discard their own freshly-authenticated cipher on every call.
                 ensureBiometricAvailable(enforceRequired);
                 storageCipher = null;
                 callback.onSuccess(null);
@@ -438,6 +728,61 @@ public class FlutterSecureStorage {
     }
 
     /**
+     * Whether a "changed algorithm" seen only because there are no markers can
+     * be resolved without migrating: RSA key cipher, and either nothing stored
+     * or the data already reads with the current cipher. Read-only.
+     */
+    private boolean canSkipMarkerlessMigration() {
+        if (!storageCipherFactory.assumedSavedAlgorithms()) {
+            return false;
+        }
+        try {
+            if (storageCipherFactory.getCurrentKeyCipher(context).getCipher(context) != null) {
+                return false; // biometric key, can't decrypt without a prompt
+            }
+            SharedPreferences dataPrefs = context.getSharedPreferences(
+                    config.getEffectiveDataPrefsName(),
+                    Context.MODE_PRIVATE
+            );
+            String sample = null;
+            for (Map.Entry<String, ?> entry : dataPrefs.getAll().entrySet()) {
+                if (entry.getValue() instanceof String
+                        && entry.getKey().startsWith(config.getSharedPreferencesKeyPrefix() + "_")) {
+                    sample = (String) entry.getValue();
+                    break;
+                }
+            }
+            if (sample == null) {
+                if (dataPrefs.contains("__androidx_security_crypto_encrypted_prefs_key_keyset__")
+                        || dataPrefs.contains("__androidx_security_crypto_encrypted_prefs_value_keyset__")) return false;
+                return true; // fresh install: nothing to migrate
+            }
+            return storageCipherFactory.currentCipherDecrypts(context, Base64.decode(sample, 0));
+        } catch (Throwable t) {
+            if (t instanceof VirtualMachineError) {
+                throw (VirtualMachineError) t;
+            }
+            Log.d(TAG, "Marker-less migration probe failed; will migrate", t);
+            return false;
+        }
+    }
+
+    /**
+     * Whether dataSource has any of this instance's own encrypted entries. When there are no
+     * markers, the saved algorithm is only a guess, and its KeyCipher can share a Keystore alias
+     * with a sibling instance on a different algorithm. Skip constructing it when there's nothing
+     * to decrypt, so a guess never clobbers a sibling's real key.
+     */
+    private boolean hasAnyEncryptedData(SharedPreferences dataSource) {
+        for (Map.Entry<String, ?> entry : dataSource.getAll().entrySet()) {
+            if (entry.getKey().contains(config.getSharedPreferencesKeyPrefix())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Migrates data from old cipher algorithm to new cipher algorithm.
      * Handles both biometric and non-biometric migration paths.
      *
@@ -450,7 +795,9 @@ public class FlutterSecureStorage {
         Log.i(TAG, "Starting data migration from saved to current cipher algorithms...");
 
         try {
-            // Determine if this is a biometric migration
+            // "Biometric" is a property of the key cipher, not the storage cipher, so read the
+            // key algorithms off the factory's resolved fields rather than a fresh configSource
+            // read, which would see the CURRENT markers the factory just wrote there.
             KeyCipherAlgorithm savedKeyAlg = storageCipherFactory.getSavedKeyAlgorithm();
             KeyCipherAlgorithm currentKeyAlg = storageCipherFactory.getCurrentKeyAlgorithm();
 
@@ -584,7 +931,7 @@ public class FlutterSecureStorage {
                     throw new Exception("Failed to commit encrypted data for key: " + key);
                 }
 
-                configSource.edit().putBoolean(migratedMarker, true).commit();
+                configSource.commit(configSource.edit().putBoolean(migratedMarker, true));
                 count++;
             } catch (Exception e) {
                 Log.e(TAG, "Failed to encrypt key: " + key, e);
@@ -596,7 +943,7 @@ public class FlutterSecureStorage {
     }
 
     /**
-     * Checks if a key cipher algorithm indicates biometric/Keystore-resident authentication.
+     * Checks if a key cipher algorithm is the Keystore-resident, biometric-capable one.
      */
     private boolean isBiometricAlgorithm(KeyCipherAlgorithm algorithm) {
         return algorithm == KeyCipherAlgorithm.AES_GCM_NoPadding;
@@ -616,26 +963,32 @@ public class FlutterSecureStorage {
         Log.i(TAG, "Starting non-biometric migration (no authentication required)...");
 
         try {
-            // Step 1: Get saved cipher (old algorithm, no auth needed)
-            Log.d(TAG, "Step 1/6: Initializing saved cipher...");
-            StorageCipher savedCipher = storageCipherFactory.getSavedStorageCipher(context, null);
+            Map<String, String> decryptedCache;
+            if (storageCipherFactory.assumedSavedAlgorithms() && !hasAnyEncryptedData(dataSource)) {
+                Log.d(TAG, "Steps 1-3/6: Nothing stored under the assumed legacy algorithm; skipping old-key handling.");
+                decryptedCache = new HashMap<>();
+            } else {
+                // Step 1: Get saved cipher (old algorithm, no auth needed)
+                Log.d(TAG, "Step 1/6: Initializing saved cipher...");
+                StorageCipher savedCipher = storageCipherFactory.getSavedStorageCipher(context, null);
 
-            // Step 2: Decrypt all data with old cipher
-            Log.d(TAG, "Step 2/6: Decrypting all data with saved cipher...");
-            Map<String, String> decryptedCache = decryptAllWithSavedCipher(dataSource, savedCipher);
+                // Step 2: Decrypt all data with old cipher
+                Log.d(TAG, "Step 2/6: Decrypting all data with saved cipher...");
+                decryptedCache = decryptAllWithSavedCipher(dataSource, savedCipher);
 
-            // Step 3: Delete OLD RSA key from Android KeyStore
-            // Critical: Must delete before creating new RSA key to avoid key collision
-            Log.d(TAG, "Step 3/6: Deleting old RSA key from Android KeyStore...");
-            if (storageCipherFactory.changedKeyAlgorithm() && canSafelyDeleteOldKey()) {
-                try {
-                    KeyCipher savedKeyCipher = storageCipherFactory.getSavedKeyCipher(context);
-                    savedKeyCipher.deleteKey();
+                // Step 3: Delete OLD RSA key from Android KeyStore
+                // Critical: Must delete before creating new RSA key to avoid key collision
+                Log.d(TAG, "Step 3/6: Deleting old RSA key from Android KeyStore...");
+                if (storageCipherFactory.changedKeyAlgorithm() && canSafelyDeleteOldKey()) {
+                    try {
+                        KeyCipher savedKeyCipher = storageCipherFactory.getSavedKeyCipher(context);
+                        savedKeyCipher.deleteKey();
 
-                    savedCipher.deleteKey(context);
-                    Log.d(TAG, "Old key deleted from KeyStore");
-                } catch (Exception deleteError) {
-                    Log.w(TAG, "Failed to delete old key from KeyStore (may not exist)", deleteError);
+                        savedCipher.deleteKey(context);
+                        Log.d(TAG, "Old key deleted from KeyStore");
+                    } catch (Exception deleteError) {
+                        Log.w(TAG, "Failed to delete old key from KeyStore (may not exist)", deleteError);
+                    }
                 }
             }
 
@@ -673,7 +1026,7 @@ public class FlutterSecureStorage {
     private void updateAlgorithmMarkers(NamespacedConfigSource configSource) {
         SharedPreferences.Editor editor = configSource.edit();
         storageCipherFactory.storeCurrentAlgorithms(editor);
-        editor.commit();
+        configSource.commit(editor);
         Log.d(TAG, "Algorithm markers updated to current");
     }
 
@@ -825,23 +1178,29 @@ public class FlutterSecureStorage {
     private void migrateFromNonBiometricToBiometric(NamespacedConfigSource configSource, SharedPreferences dataSource,
                                                     SecurePreferencesCallback<Void> callback) {
         try {
-            // Step 1: Decrypt with OLD non-biometric cipher (no auth)
-            Log.d(TAG, "Step 1/6: Decrypting all data with saved non-biometric cipher...");
-            StorageCipher savedCipher = storageCipherFactory.getSavedStorageCipher(context, null);
-            Map<String, String> decryptedCache = decryptAllWithSavedCipher(dataSource, savedCipher);
+            Map<String, String> decryptedCache;
+            if (storageCipherFactory.assumedSavedAlgorithms() && !hasAnyEncryptedData(dataSource)) {
+                Log.d(TAG, "Steps 1-2/6: Nothing stored under the assumed legacy algorithm; skipping old-key handling.");
+                decryptedCache = new HashMap<>();
+            } else {
+                // Step 1: Decrypt with OLD non-biometric cipher (no auth)
+                Log.d(TAG, "Step 1/6: Decrypting all data with saved non-biometric cipher...");
+                StorageCipher savedCipher = storageCipherFactory.getSavedStorageCipher(context, null);
+                decryptedCache = decryptAllWithSavedCipher(dataSource, savedCipher);
 
-            // Step 2: Delete OLD RSA key from Android KeyStore
-            // Critical: Must delete before creating new biometric AES key to avoid key type collision
-            Log.d(TAG, "Step 2/6: Deleting old RSA key from Android KeyStore...");
-            if (storageCipherFactory.changedKeyAlgorithm() && canSafelyDeleteOldKey()) {
-                try {
-                    KeyCipher savedKeyCipher = storageCipherFactory.getSavedKeyCipher(context);
-                    savedKeyCipher.deleteKey();
+                // Step 2: Delete OLD RSA key from Android KeyStore
+                // Critical: Must delete before creating new biometric AES key to avoid key type collision
+                Log.d(TAG, "Step 2/6: Deleting old RSA key from Android KeyStore...");
+                if (storageCipherFactory.changedKeyAlgorithm() && canSafelyDeleteOldKey()) {
+                    try {
+                        KeyCipher savedKeyCipher = storageCipherFactory.getSavedKeyCipher(context);
+                        savedKeyCipher.deleteKey();
 
-                    savedCipher.deleteKey(context);
-                    Log.d(TAG, "Old key deleted from KeyStore");
-                } catch (Exception deleteError) {
-                    Log.w(TAG, "Failed to delete old key from KeyStore (may not exist)", deleteError);
+                        savedCipher.deleteKey(context);
+                        Log.d(TAG, "Old key deleted from KeyStore");
+                    } catch (Exception deleteError) {
+                        Log.w(TAG, "Failed to delete old key from KeyStore (may not exist)", deleteError);
+                    }
                 }
             }
 
@@ -1004,6 +1363,16 @@ public class FlutterSecureStorage {
         }
     }
 
+    private void setEncryptedPrefsMigrated(NamespacedConfigSource configSource) {
+        SharedPreferences.Editor editor = configSource.edit();
+        editor.putBoolean("ENCRYPTED_PREFERENCES_MIGRATED", true);
+        configSource.commit(editor);
+    }
+
+    private Boolean getEncryptedPrefsMigrated(NamespacedConfigSource configSource) {
+        return configSource.getBoolean("ENCRYPTED_PREFERENCES_MIGRATED", false);
+    }
+
     /**
      * Handles key mismatch exceptions that occur when stored encryption keys
      * cannot be decrypted/unwrapped due to algorithm changes or key corruption.
@@ -1032,6 +1401,7 @@ public class FlutterSecureStorage {
                 @Override
                 public void onSuccess(Void unused) {
                     Log.i(TAG, "Data migration completed successfully!");
+                    setEncryptedPrefsMigrated(configSource);
                     callback.onSuccess(null);
                 }
 
@@ -1043,6 +1413,7 @@ public class FlutterSecureStorage {
                     if (config.shouldDeleteOnFailure()) {
                         Log.w(TAG, "resetOnError is enabled. Deleting all data as fallback...");
                         deleteAllDataAndKeys(configSource, callback);
+                        setEncryptedPrefsMigrated(configSource);
                     } else {
                         Log.e(TAG, "Set resetOnError=true to automatically delete data after migration failure.");
                         String userMessage = String.format(
@@ -1089,18 +1460,12 @@ public class FlutterSecureStorage {
                 Log.w(TAG, "Failed to delete key from AndroidKeyStore (may not exist)", keyDeleteError);
             }
 
-            // Delete all encrypted data for this key prefix
+            // Delete all encrypted data
             SharedPreferences dataPrefs = context.getSharedPreferences(
                     config.getEffectiveDataPrefsName(),
                     Context.MODE_PRIVATE
             );
-            SharedPreferences.Editor dataEditor = dataPrefs.edit();
-            for (String key : dataPrefs.getAll().keySet()) {
-                if (key.contains(config.getSharedPreferencesKeyPrefix())) {
-                    dataEditor.remove(key);
-                }
-            }
-            dataEditor.apply();
+            dataPrefs.edit().clear().apply();
             Log.d(TAG, "Deleted all encrypted data");
 
             // Delete stored wrapped keys
@@ -1247,6 +1612,8 @@ public class FlutterSecureStorage {
     }
 
     private void authenticateUser(Cipher cipher, SecurePreferencesCallback<BiometricPrompt.AuthenticationResult> securePreferencesCallback) throws Exception {
+        final String authenticatingFamily = config.getEffectiveDataPrefsName();
+        final long authenticatingEpoch = MigrationArtifacts.familyEpoch(authenticatingFamily);
         // Check if biometric is available based on enforcement setting
         boolean enforceRequired = config.getEnforceBiometrics();
         ensureBiometricAvailable(enforceRequired);
@@ -1255,11 +1622,8 @@ public class FlutterSecureStorage {
             if (enforceRequired) {
                 throw new Exception("BIOMETRIC_UNAVAILABLE: Biometric authentication requires Android 9 (API 28) or higher");
             }
-            // Skip authentication if not enforced. Callers wait on this callback to
-            // continue (e.g. to complete a migration), so it must still fire or the
-            // caller hangs forever with no prompt ever shown.
             securePreferencesCallback.onSuccess(null);
-            return;
+            return; // Complete the continuation when authentication is not enforced
         }
 
         BiometricPrompt.CryptoObject crypto = new BiometricPrompt.CryptoObject(cipher);
@@ -1298,7 +1662,13 @@ public class FlutterSecureStorage {
             @Override
             public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult result) {
                 super.onAuthenticationSucceeded(result);
-                securePreferencesCallback.onSuccess(result);
+                synchronized (MigrationArtifacts.familyLock(authenticatingFamily)) {
+                    if (authenticatingEpoch != MigrationArtifacts.familyEpoch(authenticatingFamily)) {
+                        securePreferencesCallback.onError(new IllegalStateException("Storage family changed during authentication"));
+                        return;
+                    }
+                    securePreferencesCallback.onSuccess(result);
+                }
             }
 
             @Override
@@ -1310,6 +1680,108 @@ public class FlutterSecureStorage {
         };
 
         promptInfo.authenticate(crypto, cancellationSignal, executor, callback);
+    }
+
+    /**
+     * Checks if EncryptedSharedPreferences contains any data with our prefix.
+     */
+    private boolean hasDataInEncryptedSharedPreferences(SharedPreferences encryptedPreferences) {
+        Map<String, ?> all = encryptedPreferences.getAll();
+        for (String key : all.keySet()) {
+            if (key.contains(config.getSharedPreferencesKeyPrefix())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Migrates data from EncryptedSharedPreferences to custom cipher storage WITH backup protection.
+     * This is a simpler migration since ESP data is already encrypted by Tink.
+     * We just copy ESP keys → custom cipher without creating backups (ESP encryption is the backup).
+     */
+    private void migrateESPWithBackup(SharedPreferences espSource, SharedPreferences target,
+                                      NamespacedConfigSource configSource, SecurePreferencesCallback<Void> callback) {
+        Log.i(TAG, "Starting ESP→custom cipher migration WITH backup protection...");
+
+        // Initialize custom cipher for migration target
+        initializeStorageCipher(configSource, new SecurePreferencesCallback<>() {
+            @Override
+            public void onSuccess(Void unused) {
+                try {
+                    // Migrate ESP data to custom cipher
+                    migrateFromEncryptedSharedPreferences(espSource, target);
+                    preferences = target;
+                    Log.i(TAG, "ESP migration completed successfully. Now using custom cipher storage.");
+                    setEncryptedPrefsMigrated(configSource);
+                    callback.onSuccess(null);
+                } catch (Exception e) {
+                    Log.e(TAG, "ESP migration failed. Falling back to ESP.", e);
+                    preferences = espSource;
+                    callback.onSuccess(null);
+                }
+            }
+
+            @Override
+            public void onError(Exception e) {
+                Log.e(TAG, "Cipher initialization failed during ESP migration. Using ESP.", e);
+                preferences = espSource;
+                callback.onSuccess(null);
+            }
+        });
+    }
+
+    /**
+     * Migrates data from EncryptedSharedPreferences to custom cipher storage.
+     * Data is read from ESP (plaintext after ESP decryption), then encrypted with custom cipher.
+     */
+    private void migrateFromEncryptedSharedPreferences(SharedPreferences source, SharedPreferences target) throws Exception {
+        migrateFromEncryptedSharedPreferences(source, target, storageCipher);
+    }
+
+    /**
+     * Migrates data from EncryptedSharedPreferences to custom cipher storage using specified cipher.
+     * Data is read from ESP (plaintext after ESP decryption), then encrypted with custom cipher.
+     */
+    private void migrateFromEncryptedSharedPreferences(SharedPreferences source, SharedPreferences target, StorageCipher cipher) throws Exception {
+        int migratedCount = 0;
+
+        for (Map.Entry<String, ?> entry : source.getAll().entrySet()) {
+            Object v = entry.getValue();
+            String key = entry.getKey();
+
+            if (v instanceof String plainValue && key.contains(config.getSharedPreferencesKeyPrefix())) {
+                byte[] encrypted = cipher.encrypt(plainValue.getBytes(charset));
+                String baseEncoded = Base64.encodeToString(encrypted, 0);
+                target.edit().putString(key, baseEncoded).apply();
+
+                // Remove from EncryptedSharedPreferences
+                source.edit().remove(key).apply();
+
+                migratedCount++;
+                Log.d(TAG, "Migrated key: " + key.replaceFirst(config.getSharedPreferencesKeyPrefix() + '_', ""));
+            }
+        }
+
+        Log.i(TAG, "Migration complete: " + migratedCount + " items migrated from EncryptedSharedPreferences to custom cipher storage");
+    }
+
+    private SharedPreferences initializeEncryptedSharedPreferencesManager(Context context) throws GeneralSecurityException, IOException {
+        MasterKey key = new MasterKey.Builder(context)
+                .setKeyGenParameterSpec(
+                        new KeyGenParameterSpec
+                                .Builder(MasterKey.DEFAULT_MASTER_KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
+                                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                                .setKeySize(256).build())
+                .build();
+        return EncryptedSharedPreferences.create(
+                context,
+                config.getEffectiveDataPrefsName(),
+                key,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        );
     }
 
     /**
@@ -1370,150 +1842,37 @@ public class FlutterSecureStorage {
     // MIGRATION WITH BACKUP METHODS
     // ============================================================================
 
-        private void migrateNonBiometricWithBackup(NamespacedConfigSource configSource, SharedPreferences dataSource,
-                                                   SecurePreferencesCallback<Void> callback) {
-            Log.i(TAG, "Starting non-biometric migration WITH BACKUP (rename operation)...");
-
-            try {
-                SharedPreferences keyStorage = context.getSharedPreferences(
-                    "FlutterSecureKeyStorage", Context.MODE_PRIVATE);
-
-                // Step 1: Create backup - copies data + wrapped keys to _BACKUP, keeps originals.
-                // createBackup() is idempotent: skips internally if status is already "complete".
-                // On retry after crash, backup is already complete so this is a no-op.
-                Log.d(TAG, "Step 1/8: Creating backup (copy originals to _BACKUP, keep originals)...");
-                if (storageCipherFactory.changedKeyAlgorithm()) {
-                    MigrationBackup.createBackup(
-                        dataSource,
-                        keyStorage,
-                        configSource,
-                        config,
-                        config.getSharedPreferencesKeyPrefix()
-                    );
-                    Log.i(TAG, "Backup step complete - originals preserved alongside _BACKUP copies");
-                } else {
-                    Log.i(TAG, "No algorithm change detected, skipping backup");
-                }
-
-                // Step 2: Restore wrapped keys from _BACKUP, then initialize old cipher.
-                // On first run: originals still exist, restore is a no-op (same value).
-                // On retry after crash at step 4 or earlier: originals were deleted, restore brings them back.
-                // IMPORTANT: If _MIGRATED markers exist, step 6 already ran (at least partially) in a prior
-                // crashed run. The new OAEP-wrapped AES key is already in keyStorage. We still need to
-                // temporarily restore the old _BACKUP key so getSavedStorageCipher can initialize (it reads
-                // from keyStorage using the old RSA key). After savedCipher is initialized, we put the new
-                // key back so step 6's preserved data remains readable with the new cipher.
-                Log.d(TAG, "Step 2/8: Restoring wrapped keys from _BACKUP and initializing saved cipher...");
-                boolean alreadyPartiallyMigrated = MigrationBackup.hasMigratedMarkers(
-                        configSource, config.getSharedPreferencesKeyPrefix());
-                // If step 6 ran previously, save the current (new) keyStorage entries so we can
-                // restore them after initializing savedCipher from the _BACKUP blobs.
-                Map<String, String> newKeyStorageEntries = new HashMap<>();
-                if (alreadyPartiallyMigrated) {
-                    for (Map.Entry<String, ?> entry : keyStorage.getAll().entrySet()) {
-                        String k = entry.getKey();
-                        if (!k.endsWith("_BACKUP") && entry.getValue() instanceof String) {
-                            newKeyStorageEntries.put(k, (String) entry.getValue());
-                        }
-                    }
-                    Log.d(TAG, "Step 2/8: _MIGRATED markers found — saved " + newKeyStorageEntries.size()
-                            + " new key entries; temporarily restoring _BACKUP blobs for savedCipher init");
-                }
-                // Restore _BACKUP key blobs (so savedCipher can unwrap with old RSA key)
-                SharedPreferences.Editor keyRestoreEditor = keyStorage.edit();
-                for (Map.Entry<String, ?> entry : keyStorage.getAll().entrySet()) {
-                    String k = entry.getKey();
-                    if (k.endsWith("_BACKUP") && entry.getValue() instanceof String) {
-                        String originalKey = k.substring(0, k.length() - "_BACKUP".length());
-                        keyRestoreEditor.putString(originalKey, (String) entry.getValue());
-                    }
-                }
-                keyRestoreEditor.commit();
-                StorageCipher savedCipher = storageCipherFactory.getSavedStorageCipher(context, null);
-                // After savedCipher init: if step 6 already ran, put the new wrapped key back
-                // so subsequent reads (and step 6 for any remaining keys) use the correct cipher.
-                if (alreadyPartiallyMigrated && !newKeyStorageEntries.isEmpty()) {
-                    SharedPreferences.Editor keyRevertEditor = keyStorage.edit();
-                    for (Map.Entry<String, String> entry : newKeyStorageEntries.entrySet()) {
-                        keyRevertEditor.putString(entry.getKey(), entry.getValue());
-                    }
-                    keyRevertEditor.commit();
-                    Log.d(TAG, "Step 2/8: New wrapped key restored to keyStorage after savedCipher init");
-                }
-
-                // Step 3: Decrypt all data FROM _BACKUP keys (in memory only)
-                // _BACKUP keys always contain the original old ciphertext, regardless of how many
-                // times migration has been retried. Even if step 6 already re-encrypted the
-                // Step 2 restored the wrapped AES key blob to its original name so savedCipher
-                // is initialized correctly. Data is read from _BACKUP keys (not originals) because
-                // originals may already be re-encrypted with the new cipher from a prior partial run.
-                Log.d(TAG, "Step 3/8: Decrypting all data from _BACKUP keys...");
-                Map<String, String> decryptedCache = decryptAllWithSavedCipherFromBackup(dataSource, null, savedCipher);
-                Log.d(TAG, "Successfully decrypted " + decryptedCache.size() + " items from _BACKUP keys");
-
-                // Step 4: Delete originals from dataSource and keyStorage.
-                // Keys already marked _MIGRATED in configSource are preserved — they were
-                // successfully re-encrypted on a prior (crashed) run and must not be deleted,
-                // as step 6 will skip them (they're already in dataSource with new cipher).
-                Log.d(TAG, "Step 4/8: Deleting original encrypted entries (preserving already-migrated)...");
-                MigrationBackup.deleteOriginalData(dataSource, keyStorage, configSource, config.getSharedPreferencesKeyPrefix());
-
-                if (decryptedCache.isEmpty()) {
-                    Log.i(TAG, "No data found to migrate");
-                } else {
-                    Log.i(TAG, "Found " + decryptedCache.size() + " items to migrate");
-                }
-
-                // Step 5: Create new cipher (NEW algorithm)
-                Log.d(TAG, "Step 5/8: Initializing current cipher with new algorithm...");
-                StorageCipher currentCipher = storageCipherFactory.getCurrentStorageCipher(context, null);
-
-                if (decryptedCache.isEmpty()) {
-                    Log.i(TAG, "Step 6/8: No data to encrypt, skipping...");
-                } else {
-                    // Step 6: Encrypt all data with NEW cipher, tracking per-key progress.
-                    // On retry after a crash mid-step 6, keys already marked _MIGRATED are skipped.
-                    Log.d(TAG, "Step 6/8: Encrypting all data with current cipher (per-key tracking)...");
-                    encryptAllWithCurrentCipherTracked(decryptedCache, dataSource, configSource, currentCipher,
-                                                       config.getSharedPreferencesKeyPrefix());
-                }
-
-                // Step 7: Cleanup
-                Log.d(TAG, "Step 7/7: Cleaning up - deleting _BACKUP, _MIGRATED markers, updating markers, deleting old keys...");
-
-                // Delete all _BACKUP entries and _MIGRATED markers
-                MigrationBackup.deleteBackup(dataSource, keyStorage, configSource, config,
-                                            config.getSharedPreferencesKeyPrefix());
-                MigrationBackup.deleteMigratedMarkers(configSource, config.getSharedPreferencesKeyPrefix());
-
-                // Update algorithm markers to NEW algorithms
-                updateAlgorithmMarkers(configSource);
-
-                // Delete OLD RSA keys from Android KeyStore
-                if (storageCipherFactory.changedKeyAlgorithm() && canSafelyDeleteOldKey()) {
-                    try {
-                        KeyCipher savedKeyCipher = storageCipherFactory.getSavedKeyCipher(context);
-                        savedKeyCipher.deleteKey();
-                        savedCipher.deleteKey(context);
-                        Log.d(TAG, "Old RSA keys deleted from KeyStore");
-                    } catch (Exception deleteError) {
-                        Log.w(TAG, "Failed to delete old key from KeyStore (may not exist)", deleteError);
-                    }
-                }
-
-                // Update storageCipher to current
-                storageCipher = currentCipher;
-
-                Log.i(TAG, "Non-biometric migration with backup completed successfully!");
-                Log.i(TAG, "Migrated " + decryptedCache.size() + " data items with new algorithm.");
-
+    private void migrateNonBiometricWithBackup(NamespacedConfigSource configSource, SharedPreferences dataSource,
+                                               SecurePreferencesCallback<Void> callback) {
+        try {
+            synchronized (MigrationArtifacts.familyLock(config.getEffectiveDataPrefsName())) {
+                storageCipher = ordinaryMigration(configSource, dataSource).run();
+                config = config.forRootGeneration(configSource.getString(MigrationArtifacts.ACTIVE_GENERATION, null), false);
                 callback.onSuccess(null);
-
-            } catch (Exception e) {
-                Log.e(TAG, "Non-biometric migration with backup failed", e);
-                callback.onError(new Exception("Non-biometric migration with backup failed", e));
             }
+        } catch (Exception failure) {
+            callback.onError(new Exception("Ordinary secure storage migration was not completed", failure));
         }
+    }
+
+    private OrdinaryMigration ordinaryMigration(NamespacedConfigSource configSource, SharedPreferences dataSource) {
+        return new OrdinaryMigration(dataSource, configSource, new OrdinaryMigration.Ciphers() {
+                    @Override
+                    public StorageCipher load(String key, String data, String generation, boolean mayCreate) throws Exception {
+                        return storageCipherFactory.forGeneration(context, KeyCipherAlgorithm.fromString(key),
+                                com.it_nomads.fluttersecurestorage.ciphers.StorageCipherAlgorithm.fromString(data),
+                                generation, mayCreate);
+                    }
+                    @Override
+                    public void retire(String key, String data, String generation) throws Exception {
+                        storageCipherFactory.retireGeneration(context, KeyCipherAlgorithm.fromString(key),
+                                com.it_nomads.fluttersecurestorage.ciphers.StorageCipherAlgorithm.fromString(data), generation);
+                    }
+                }, config.getSharedPreferencesKeyPrefix(), storageCipherFactory.getSavedKeyAlgorithm().name(),
+                        storageCipherFactory.getSavedStorageAlgorithm().name(),
+                        storageCipherFactory.getCurrentKeyAlgorithm().name(),
+                        storageCipherFactory.getCurrentStorageAlgorithm().name());
+    }
         private Map<String, String> decryptAllWithSavedCipherFromBackup(SharedPreferences dataSource,
                                                                          SharedPreferences espSource,
                                                                          StorageCipher savedStorageCipher) throws Exception {
@@ -1541,8 +1900,7 @@ public class FlutterSecureStorage {
                         }
                     }
                 } catch (Exception e) {
-                    Log.w(TAG, "Failed to read ESP _BACKUP keys: " + e.getMessage());
-                    // Continue with regular backup keys
+                    throw new IllegalStateException("Encrypted source backup is unavailable", e);
                 }
             }
 
@@ -1566,7 +1924,7 @@ public class FlutterSecureStorage {
                         decryptedCache.put(originalKey, plainValue);
                         encryptedCount++;
                     } catch (Exception decryptError) {
-                        Log.e(TAG, "Failed to decrypt _BACKUP key (skipping): " + key, decryptError);
+                        throw new IllegalStateException("Encrypted source backup cannot be verified", decryptError);
                     }
                 }
             }
@@ -1579,7 +1937,7 @@ public class FlutterSecureStorage {
                                                                    SecurePreferencesCallback<Void> callback) {
             try {
                 SharedPreferences keyStorage = context.getSharedPreferences(
-                    "FlutterSecureKeyStorage", Context.MODE_PRIVATE);
+                    config.getEffectiveKeyStoragePrefsName(), Context.MODE_PRIVATE);
 
                 // Step 0: Create backup BEFORE any destructive operations
                 String backupStatus = MigrationBackup.getBackupStatus(configSource, config);
@@ -1671,7 +2029,7 @@ public class FlutterSecureStorage {
                                                                    SecurePreferencesCallback<Void> callback) {
             try {
                 SharedPreferences keyStorage = context.getSharedPreferences(
-                    "FlutterSecureKeyStorage", Context.MODE_PRIVATE);
+                    config.getEffectiveKeyStoragePrefsName(), Context.MODE_PRIVATE);
 
                 // Step 0: Create backup BEFORE any destructive operations
                 String backupStatus = MigrationBackup.getBackupStatus(configSource, config);
@@ -1764,7 +2122,7 @@ public class FlutterSecureStorage {
                                                             SecurePreferencesCallback<Void> callback) {
             try {
                 SharedPreferences keyStorage = context.getSharedPreferences(
-                    "FlutterSecureKeyStorage", Context.MODE_PRIVATE);
+                    config.getEffectiveKeyStoragePrefsName(), Context.MODE_PRIVATE);
 
                 // Step 0: Create backup BEFORE any destructive operations
                 String backupStatus = MigrationBackup.getBackupStatus(configSource, config);

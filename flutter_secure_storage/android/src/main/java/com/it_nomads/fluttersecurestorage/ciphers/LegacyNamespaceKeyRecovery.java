@@ -6,6 +6,7 @@ import android.util.Base64;
 import android.util.Log;
 
 import com.it_nomads.fluttersecurestorage.FlutterSecureStorageConfig;
+import com.it_nomads.fluttersecurestorage.CheckedPreferences;
 
 import java.security.Key;
 import java.security.spec.AlgorithmParameterSpec;
@@ -14,6 +15,7 @@ import java.util.Map;
 
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
@@ -21,22 +23,39 @@ import javax.crypto.spec.SecretKeySpec;
  * and storageNamespace with the same name. Only the key lives in a different
  * place; the data prefs file and algorithm markers already line up, so copying
  * the key across is enough. The source copy is left in place so switching back
- * keeps working. Non-biometric RSA-OAEP + AES-GCM only.
+ * keeps working. Non-biometric only; the wrapped key is unwrapped and rewrapped
+ * with the same RSA algorithm it was already using (OAEP, or legacy PKCS1 for
+ * installs that never went through the v10.0.0 OAEP migration), tried in that
+ * order since OAEP is the common case.
  * <p>
- * Every non-namespaced instance shares the same plain key-storage file, so a
- * sibling's wrapped key could sit under the same preference name. A candidate
- * is only trusted once it's confirmed to decrypt this instance's own data.
+ * Every non-namespaced instance shares the same plain key-storage file, so it can hold more
+ * than one instance's wrapped-key entry. Every known preference name is tried, and a candidate
+ * is only trusted once it's confirmed to decrypt this instance's own data. The entry is kept
+ * under whichever preference name it was already stored under, since v9.2.4 and v10+ each read
+ * a different name.
  */
 public final class LegacyNamespaceKeyRecovery {
 
     private static final String TAG = "LegacyNamespaceKeyRecovery";
     private static final String KEY_STORAGE_PREFIX = "FlutterSecureKeyStorage";
-    // A wrong-key unwrap can silently succeed with garbage instead of throwing, so the result
-    // is checked against the real key size (StorageCipherImplementationGCM wraps a 16-byte key).
+    private static final KeyCipherAlgorithm[] RECOVERY_ALGORITHMS = {
+            KeyCipherAlgorithm.RSA_ECB_OAEPwithSHA_256andMGF1Padding,
+            KeyCipherAlgorithm.RSA_ECB_PKCS1Padding,
+    };
+    private static final String[] WRAPPED_KEY_PREF_NAMES = {
+            StorageCipherImplementationGCM.WRAPPED_KEY_PREF,
+            StorageCipherImplementationAES18.WRAPPED_KEY_PREF,
+            StorageCipherImplementationGCM.LEGACY_V9_KEY,
+    };
+    // A wrong-algorithm unwrap can silently "succeed" with garbage instead of throwing, so the
+    // result is checked against the real key size (both storage ciphers wrap a 16-byte AES key).
     private static final int AES_KEY_SIZE_BYTES = 16;
+    // The two storage-cipher formats a recovered key might need to decrypt.
     private static final String GCM_TRANSFORMATION = "AES/GCM/NoPadding";
     private static final int GCM_IV_SIZE = 12;
     private static final int GCM_TAG_BITS = 128;
+    private static final String CBC_TRANSFORMATION = "AES/CBC/PKCS7Padding";
+    private static final int CBC_IV_SIZE = 16;
 
     /** Test seam. */
     interface KeyCipherProvider {
@@ -46,12 +65,20 @@ public final class LegacyNamespaceKeyRecovery {
     private LegacyNamespaceKeyRecovery() {}
 
     public static boolean recoverIfNeeded(Context context, FlutterSecureStorageConfig config) {
-        return recoverIfNeeded(context, config,
-                c -> KeyCipherAlgorithm.RSA_ECB_OAEPwithSHA_256andMGF1Padding.keyCipher.apply(context, c));
+        KeyCipherProvider[] providers = new KeyCipherProvider[RECOVERY_ALGORITHMS.length];
+        for (int i = 0; i < RECOVERY_ALGORITHMS.length; i++) {
+            KeyCipherAlgorithm algorithm = RECOVERY_ALGORITHMS[i];
+            providers[i] = c -> algorithm.keyCipher.apply(context, c);
+        }
+        return recoverIfNeeded(context, config, providers);
     }
 
+    /**
+     * Tries every (preference name, RSA algorithm) combination until one produces a key that
+     * actually decrypts this instance's own data.
+     */
     static boolean recoverIfNeeded(Context context, FlutterSecureStorageConfig config,
-                                   KeyCipherProvider keyCiphers) {
+                                   KeyCipherProvider... keyCiphers) {
         String name = config.getEffectiveDataPrefsName();
         SharedPreferences plainKeyPrefs = context.getSharedPreferences(
                 KEY_STORAGE_PREFIX, Context.MODE_PRIVATE);
@@ -76,33 +103,48 @@ public final class LegacyNamespaceKeyRecovery {
             targetConfig = config;
         }
 
-        if (hasWrappedKey(target) || !hasWrappedKey(source) || !hasEncryptedData(context, name, config)) {
+        if (hasWrappedKey(target) || !hasEncryptedData(context, name, config)) {
             return false;
         }
 
+        String keyPrefix = config.getSharedPreferencesKeyPrefix();
+        for (String candidateName : WRAPPED_KEY_PREF_NAMES) {
+            if (!source.contains(candidateName)) {
+                continue;
+            }
+            for (KeyCipherProvider keyCipher : keyCiphers) {
+                if (tryRecover(context, name, source, target, sourceConfig, targetConfig,
+                        candidateName, keyPrefix, keyCipher)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean tryRecover(Context context, String name, SharedPreferences source,
+                                      SharedPreferences target, FlutterSecureStorageConfig sourceConfig,
+                                      FlutterSecureStorageConfig targetConfig, String sourceKeyPrefName,
+                                      String keyPrefix, KeyCipherProvider keyCiphers) {
         try {
-            byte[] wrapped = Base64.decode(
-                    source.getString(StorageCipherImplementationGCM.WRAPPED_KEY_PREF, null),
-                    Base64.DEFAULT);
-            Key aesKey = keyCiphers.forConfig(sourceConfig)
+            byte[] wrapped = Base64.decode(source.getString(sourceKeyPrefName, null), Base64.DEFAULT);
+            Key aesKey = keyCiphers.forConfig(sourceConfig.forRootGeneration(null, false))
                     .unwrap(wrapped, StorageCipherImplementationGCM.WRAPPED_KEY_ALGORITHM);
             byte[] encodedAesKey = aesKey.getEncoded();
             if (encodedAesKey == null || encodedAesKey.length != AES_KEY_SIZE_BYTES) {
                 throw new Exception("Unwrapped key is not AES-key-shaped ("
                         + (encodedAesKey == null ? "null" : encodedAesKey.length + " bytes")
-                        + "); likely belongs to a different instance");
+                        + "); likely the wrong RSA algorithm");
             }
-            if (!keyDecryptsOwnData(context, name, config.getSharedPreferencesKeyPrefix(), encodedAesKey)) {
+            if (!keyDecryptsOwnData(context, name, keyPrefix, encodedAesKey)) {
                 throw new Exception("Unwrapped key does not decrypt this instance's own data; "
                         + "likely a different instance's key under the same preference name");
             }
 
-            byte[] rewrapped = keyCiphers.forConfig(targetConfig).wrap(aesKey);
+            byte[] rewrapped = keyCiphers.forConfig(targetConfig.forRootGeneration(null, true)).wrap(aesKey);
 
-            target.edit()
-                    .putString(StorageCipherImplementationGCM.WRAPPED_KEY_PREF,
-                            Base64.encodeToString(rewrapped, Base64.DEFAULT))
-                    .apply();
+            CheckedPreferences.commit(target, target.edit()
+                    .putString(sourceKeyPrefName, Base64.encodeToString(rewrapped, Base64.DEFAULT)));
 
             Log.i(TAG, "Moved wrapped key for namespace '" + name + "'");
             return true;
@@ -116,7 +158,12 @@ public final class LegacyNamespaceKeyRecovery {
     }
 
     private static boolean hasWrappedKey(SharedPreferences prefs) {
-        return prefs.getString(StorageCipherImplementationGCM.WRAPPED_KEY_PREF, null) != null;
+        for (String prefName : WRAPPED_KEY_PREF_NAMES) {
+            if (prefs.contains(prefName)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // Guards against pulling an unrelated instance's key into an empty store.
@@ -138,15 +185,24 @@ public final class LegacyNamespaceKeyRecovery {
         } catch (IllegalArgumentException e) {
             return false;
         }
-        if (ciphertext.length <= GCM_IV_SIZE) {
+        Key key = new SecretKeySpec(rawAesKey, "AES");
+        return canDecrypt(ciphertext, key, GCM_TRANSFORMATION, GCM_IV_SIZE, new GCMParameterSpec(GCM_TAG_BITS, ivOf(ciphertext, GCM_IV_SIZE)))
+                || canDecrypt(ciphertext, key, CBC_TRANSFORMATION, CBC_IV_SIZE, new IvParameterSpec(ivOf(ciphertext, CBC_IV_SIZE)));
+    }
+
+    private static byte[] ivOf(byte[] input, int ivSize) {
+        return input.length >= ivSize ? Arrays.copyOfRange(input, 0, ivSize) : new byte[0];
+    }
+
+    private static boolean canDecrypt(byte[] input, Key key, String transformation, int ivSize,
+                                      AlgorithmParameterSpec spec) {
+        if (input.length <= ivSize) {
             return false;
         }
         try {
-            byte[] iv = Arrays.copyOfRange(ciphertext, 0, GCM_IV_SIZE);
-            byte[] payload = Arrays.copyOfRange(ciphertext, GCM_IV_SIZE, ciphertext.length);
-            Cipher cipher = Cipher.getInstance(GCM_TRANSFORMATION);
-            AlgorithmParameterSpec spec = new GCMParameterSpec(GCM_TAG_BITS, iv);
-            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(rawAesKey, "AES"), spec);
+            byte[] payload = Arrays.copyOfRange(input, ivSize, input.length);
+            Cipher cipher = Cipher.getInstance(transformation);
+            cipher.init(Cipher.DECRYPT_MODE, key, spec);
             cipher.doFinal(payload);
             return true;
         } catch (Throwable e) {

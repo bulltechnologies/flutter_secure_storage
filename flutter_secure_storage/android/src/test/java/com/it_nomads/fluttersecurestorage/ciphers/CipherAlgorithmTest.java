@@ -44,11 +44,9 @@ public class CipherAlgorithmTest {
     }
 
     @Test
-    public void keyCipher_fromString_removedPKCS1_mapsToOAEP() {
-        // RSA_ECB_PKCS1Padding was removed in v11; maps to OAEP so the plugin
-        // can initialise and resetOnError can clear the unreadable ciphertext.
+    public void keyCipher_fromString_legacyPKCS1_keepsItsReader() {
         assertEquals(
-            KeyCipherAlgorithm.RSA_ECB_OAEPwithSHA_256andMGF1Padding,
+            KeyCipherAlgorithm.RSA_ECB_PKCS1Padding,
             KeyCipherAlgorithm.fromString("RSA_ECB_PKCS1Padding")
         );
     }
@@ -82,11 +80,9 @@ public class CipherAlgorithmTest {
     }
 
     @Test
-    public void storageCipher_fromString_removedCBC_mapsToGCM() {
-        // AES_CBC_PKCS7Padding was removed in v11; maps to GCM so the plugin
-        // can initialise and resetOnError can clear the unreadable ciphertext.
+    public void storageCipher_fromString_legacyCBC_keepsItsReader() {
         assertEquals(
-            StorageCipherAlgorithm.AES_GCM_NoPadding,
+            StorageCipherAlgorithm.AES_CBC_PKCS7Padding,
             StorageCipherAlgorithm.fromString("AES_CBC_PKCS7Padding")
         );
     }
@@ -97,11 +93,11 @@ public class CipherAlgorithmTest {
 
     @Test
     public void keyCipher_hasExpectedNumberOfValues() {
-        assertEquals(2, KeyCipherAlgorithm.values().length);
+        assertEquals(3, KeyCipherAlgorithm.values().length);
     }
 
     @Test
     public void storageCipher_hasExpectedNumberOfValues() {
-        assertEquals(1, StorageCipherAlgorithm.values().length);
+        assertEquals(2, StorageCipherAlgorithm.values().length);
     }
 }

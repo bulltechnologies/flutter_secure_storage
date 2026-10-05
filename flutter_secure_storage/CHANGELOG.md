@@ -1,5 +1,15 @@
 # Changelog
 
+## 11.2.0+index.1
+
+- Merge upstream 11.2.0, retaining the Index ordinary migration and persistence protocol.
+- Keep legacy readers and identity/backend options needed by existing stores;
+  the stock 11.0.0 removal notes below do not apply to those fork compatibility paths.
+- Include the 11.x asynchronous API and biometric options with owned family guards.
+- Consume Darwin 0.4.3 with in-place update-query correction and item preservation.
+- Add independent fork CI and compatibility/recovery regression tests.
+- Allow compatible Windows 4.x backends so existing mobile Win32 v5 graphs resolve.
+
 ## [11.2.0](https://github.com/juliansteenbakker/flutter_secure_storage/compare/flutter_secure_storage-v11.1.1...flutter_secure_storage-v11.2.0) (2026-09-16)
 
 
@@ -44,7 +54,7 @@
 
 **Breaking changes**
 
-items deprecated in v10 have been removed. 
+items deprecated in v10 have been removed.
 Any data saved using deprecated algorithms or features will be unusable after this upgrade. If you used a version prior to v10, upgrade to v10 first so existing data is migrated.
 
 ### Android

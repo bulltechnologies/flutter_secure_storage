@@ -17,6 +17,7 @@ import java.util.Set;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 @RunWith(RobolectricTestRunner.class)
@@ -163,20 +164,22 @@ public class MigrationBackupTest {
     }
 
     @Test
-    public void createBackup_restartsIfStatusIsStarted() {
-        // Simulate a partially created backup: existing _BACKUP entry from crashed run
+    public void createBackup_preservesStartedSourceAndRefusesAmbiguousRecovery() {
+        // A STARTED flag cannot prove the existing backup is disposable. It
+        // may be the last durable record left by an interrupted earlier run.
         dataSource.edit()
                 .putString(KEY_PREFIX + "_key1", "value1")
-                .putString(KEY_PREFIX + "_oldKey_BACKUP", "staleValue")
+                .putString(KEY_PREFIX + "_oldKey_BACKUP", "lastSourceValue")
                 .commit();
         configSource.edit().putString(BACKUP_STATUS_KEY, MigrationBackup.STATUS_STARTED).commit();
 
-        MigrationBackup.createBackup(dataSource, keyStorage, configSource, configWithBackup, KEY_PREFIX);
+        Map<String, ?> before = new HashMap<>(dataSource.getAll());
+        assertThrows(IllegalStateException.class,
+                () -> MigrationBackup.createBackup(dataSource, keyStorage, configSource, configWithBackup, KEY_PREFIX));
 
-        // Stale _BACKUP entry should be gone, new one created
-        assertNull(dataSource.getString(KEY_PREFIX + "_oldKey_BACKUP", null));
-        assertEquals("value1", dataSource.getString(KEY_PREFIX + "_key1_BACKUP", null));
-        assertEquals(MigrationBackup.STATUS_COMPLETE, configSource.getString(BACKUP_STATUS_KEY, null));
+        assertEquals(before, dataSource.getAll());
+        assertEquals("lastSourceValue", dataSource.getString(KEY_PREFIX + "_oldKey_BACKUP", null));
+        assertEquals(MigrationBackup.STATUS_STARTED, configSource.getString(BACKUP_STATUS_KEY, null));
     }
 
     @Test
@@ -274,16 +277,24 @@ public class MigrationBackupTest {
     }
 
     @Test
-    public void createBackup_withEspSource_continuesWhenEspCommitFails() {
-        SharedPreferences failingEsp = new FailingCommitSharedPreferences(
-                RuntimeEnvironment.getApplication().getSharedPreferences("TestEspFailCommit", Context.MODE_PRIVATE));
+    public void createBackup_withEspSource_preservesSourceWhenEspCommitFails() {
+        SharedPreferences espSource = RuntimeEnvironment.getApplication().getSharedPreferences("TestEspFailCommit", Context.MODE_PRIVATE);
+        espSource.edit().clear().putString(KEY_PREFIX + "_espKey", "originalEspValue").commit();
+        SharedPreferences failingEsp = new FailingCommitSharedPreferences(espSource);
         dataSource.edit().putString(KEY_PREFIX + "_key1", "value1").commit();
+        keyStorage.edit().putString("wrappedKey", "originalWrappedValue").commit();
+        Map<String, ?> dataBefore = new HashMap<>(dataSource.getAll());
+        Map<String, ?> keysBefore = new HashMap<>(keyStorage.getAll());
+        Map<String, ?> espBefore = new HashMap<>(espSource.getAll());
 
-        // ESP commit failure is caught internally — data backup still completes
-        MigrationBackup.createBackup(dataSource, keyStorage, failingEsp, configSource, configWithBackup, KEY_PREFIX);
+        assertThrows(IllegalStateException.class,
+                () -> MigrationBackup.createBackup(dataSource, keyStorage, failingEsp, configSource, configWithBackup, KEY_PREFIX));
 
-        assertEquals("value1", dataSource.getString(KEY_PREFIX + "_key1_BACKUP", null));
-        assertEquals(MigrationBackup.STATUS_COMPLETE, configSource.getString(BACKUP_STATUS_KEY, null));
+        assertEquals(dataBefore, dataSource.getAll());
+        assertEquals(keysBefore, keyStorage.getAll());
+        assertEquals(espBefore, espSource.getAll());
+        assertEquals(MigrationBackup.STATUS_STARTED, configSource.getString(BACKUP_STATUS_KEY, null));
+        assertFalse(MigrationBackup.hasBackup(configSource, configWithBackup));
     }
 
     @Test(expected = RuntimeException.class)
@@ -301,17 +312,24 @@ public class MigrationBackupTest {
     }
 
     @Test
-    public void createBackup_withCorruptedEspSource_continuesAndCompletesBackup() {
-        SharedPreferences corruptedEsp = new ThrowingSharedPreferences(
-                RuntimeEnvironment.getApplication().getSharedPreferences("TestEspCorrupted", Context.MODE_PRIVATE));
+    public void createBackup_withCorruptedEspSource_preservesSourceAndRefusesCompletion() {
+        SharedPreferences espSource = RuntimeEnvironment.getApplication().getSharedPreferences("TestEspCorrupted", Context.MODE_PRIVATE);
+        espSource.edit().clear().putString(KEY_PREFIX + "_espKey", "originalEspValue").commit();
+        SharedPreferences corruptedEsp = new ThrowingSharedPreferences(espSource);
         dataSource.edit().putString(KEY_PREFIX + "_key1", "value1").commit();
+        keyStorage.edit().putString("wrappedKey", "originalWrappedValue").commit();
+        Map<String, ?> dataBefore = new HashMap<>(dataSource.getAll());
+        Map<String, ?> keysBefore = new HashMap<>(keyStorage.getAll());
+        Map<String, ?> espBefore = new HashMap<>(espSource.getAll());
 
-        // Should not throw — exception is caught and ESP backup is skipped
-        MigrationBackup.createBackup(dataSource, keyStorage, corruptedEsp, configSource, configWithBackup, KEY_PREFIX);
+        assertThrows(IllegalStateException.class,
+                () -> MigrationBackup.createBackup(dataSource, keyStorage, corruptedEsp, configSource, configWithBackup, KEY_PREFIX));
 
-        // Data backup still completes
-        assertEquals("value1", dataSource.getString(KEY_PREFIX + "_key1_BACKUP", null));
-        assertEquals(MigrationBackup.STATUS_COMPLETE, configSource.getString(BACKUP_STATUS_KEY, null));
+        assertEquals(dataBefore, dataSource.getAll());
+        assertEquals(keysBefore, keyStorage.getAll());
+        assertEquals(espBefore, espSource.getAll());
+        assertEquals(MigrationBackup.STATUS_STARTED, configSource.getString(BACKUP_STATUS_KEY, null));
+        assertFalse(MigrationBackup.hasBackup(configSource, configWithBackup));
     }
 
     // -------------------------------------------------------------------------

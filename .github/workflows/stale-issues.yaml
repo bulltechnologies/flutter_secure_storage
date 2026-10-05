@@ -20,6 +20,7 @@ permissions:
 
 jobs:
   close-inactive-issues:
+    if: github.repository == 'juliansteenbakker/flutter_secure_storage'
     name: 🚀 Close Inactive Issues
     runs-on: ubuntu-latest
 

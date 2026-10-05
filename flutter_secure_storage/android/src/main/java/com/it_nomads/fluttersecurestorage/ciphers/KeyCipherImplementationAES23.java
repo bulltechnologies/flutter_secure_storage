@@ -13,6 +13,7 @@ import android.util.Base64;
 import android.util.Log;
 
 import com.it_nomads.fluttersecurestorage.FlutterSecureStorageConfig;
+import com.it_nomads.fluttersecurestorage.CheckedPreferences;
 
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
@@ -46,20 +47,18 @@ class KeyCipherImplementationAES23 implements KeyCipher {
     }
 
     /**
-     * A leftover key of the wrong type must never be used as-is, since Cipher.init would throw
-     * deep inside a confusing provider error. Treat that the same as "no key yet".
+     * KeyCipherImplementationRSA18 uses this exact same alias, so a leftover PrivateKey can end
+     * up here. Treat that as "no key yet" and generate a fresh symmetric key instead.
      */
     private void ensureSymmetricKeyAtAlias() throws Exception {
         KeyStore ks = KeyStore.getInstance(KEYSTORE_PROVIDER_ANDROID);
         ks.load(null);
         Key existingKey = ks.getKey(keyAlias, null);
         if (existingKey == null) {
+            if (!config.mayCreateKeys()) throw new IllegalStateException("Existing wrapping key is unavailable");
             generateSymmetricKey();
         } else if (!(existingKey instanceof SecretKey)) {
-            Log.w(TAG, "Alias " + keyAlias + " holds a " + existingKey.getClass().getSimpleName()
-                    + ", not a SecretKey, replacing it with a fresh symmetric key");
-            ks.deleteEntry(keyAlias);
-            generateSymmetricKey();
+            throw new IllegalStateException("Existing wrapping alias has an incompatible key type");
         }
     }
 
@@ -84,7 +83,7 @@ class KeyCipherImplementationAES23 implements KeyCipher {
         ks.deleteEntry(keyAlias);
 
         SharedPreferences preferences = context.getSharedPreferences(config.getEffectiveKeyStoragePrefsName(), Context.MODE_PRIVATE);
-        preferences.edit().remove(SHARED_PREFERENCES_KEY).apply();
+        CheckedPreferences.commit(preferences, preferences.edit().remove(config.rootSlot(SHARED_PREFERENCES_KEY)));
     }
 
     @Override
@@ -99,21 +98,22 @@ class KeyCipherImplementationAES23 implements KeyCipher {
     public Cipher getEncryptionCipher(Context context, Key key) throws NoSuchPaddingException, NoSuchAlgorithmException, InvalidAlgorithmParameterException, InvalidKeyException {
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
         SharedPreferences preferences = context.getSharedPreferences(config.getEffectiveKeyStoragePrefsName(), Context.MODE_PRIVATE);
-        String ivBase64 = preferences.getString(SHARED_PREFERENCES_KEY, null);
+        String ivBase64 = preferences.getString(config.rootSlot(SHARED_PREFERENCES_KEY), null);
 
         if (ivBase64 != null && StorageCipherImplementationAES23.hasApplicationKey(preferences)) {
             byte[] iv = Base64.decode(ivBase64, Base64.DEFAULT);
             GCMParameterSpec spec = new GCMParameterSpec(IV_SIZE * Byte.SIZE, iv);
             cipher.init(Cipher.DECRYPT_MODE, key, spec);
         } else {
+            if (!config.mayCreateKeys()) throw new InvalidKeyException("Existing application key/IV is unavailable");
             // IV missing, or IV exists but app key doesn't (stale from a failed/cancelled auth).
             // Start fresh with a new ENCRYPT cipher.
             cipher.init(Cipher.ENCRYPT_MODE, key);
 
             byte[] iv = cipher.getIV();
             SharedPreferences.Editor editor = preferences.edit();
-            editor.putString(SHARED_PREFERENCES_KEY, Base64.encodeToString(iv, Base64.DEFAULT));
-            editor.apply();
+            editor.putString(config.rootSlot(SHARED_PREFERENCES_KEY), Base64.encodeToString(iv, Base64.DEFAULT));
+            CheckedPreferences.commit(preferences, editor);
         }
 
         return cipher;

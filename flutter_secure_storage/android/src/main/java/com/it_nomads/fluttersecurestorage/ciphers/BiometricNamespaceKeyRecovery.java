@@ -5,17 +5,21 @@ import android.content.SharedPreferences;
 import android.util.Base64;
 
 import com.it_nomads.fluttersecurestorage.FlutterSecureStorageConfig;
+import com.it_nomads.fluttersecurestorage.CheckedPreferences;
 
 import java.util.Map;
 
 import javax.crypto.Cipher;
 
 /**
- * Moves the wrapped app key when an app switches between sharedPreferencesName
- * and storageNamespace with the same name. Mirrors LegacyNamespaceKeyRecovery,
- * but the wrapping key lives in the Keystore and needs live authentication, so
- * this class only does guard-checking and the raw unwrap/rewrap; the caller
- * drives the two BiometricPrompt round trips and passes in each cipher.
+ * Moves the wrapped app key (the AES key that actually encrypts data, itself
+ * wrapped by the biometric/PIN-gated Android Keystore key) when an app
+ * switches between sharedPreferencesName and storageNamespace with the same
+ * name. Mirrors LegacyNamespaceKeyRecovery, but the wrapping key here lives
+ * in the Keystore and requires live user authentication to use, so this
+ * class only does guard-checking and the raw unwrap/rewrap; the caller
+ * drives the two BiometricPrompt round-trips (one for the old location's
+ * key, one for the new one) and passes in each authenticated Cipher.
  */
 public final class BiometricNamespaceKeyRecovery {
 
@@ -37,7 +41,7 @@ public final class BiometricNamespaceKeyRecovery {
 
     /** The KeyCipher for the OLD location's Keystore key; its getCipher() needs authentication. */
     public static KeyCipher sourceKeyCipher(Context context, FlutterSecureStorageConfig config) throws Exception {
-        return KeyCipherAlgorithm.AES_GCM_NoPadding.keyCipher.apply(context, sourceConfig(config));
+        return KeyCipherAlgorithm.AES_GCM_NoPadding.keyCipher.apply(context, sourceConfig(config).forRootGeneration(null, false));
     }
 
     /** The KeyCipher for the NEW location's Keystore key; its getCipher() needs authentication. */
@@ -63,9 +67,8 @@ public final class BiometricNamespaceKeyRecovery {
         SharedPreferences prefs = context.getSharedPreferences(
                 config.getEffectiveKeyStoragePrefsName(), Context.MODE_PRIVATE);
         byte[] encrypted = authenticatedCipher.doFinal(appKey);
-        prefs.edit()
-                .putString(StorageCipherImplementationAES23.APP_KEY_PREF, Base64.encodeToString(encrypted, Base64.DEFAULT))
-                .apply();
+        CheckedPreferences.commit(prefs, prefs.edit()
+                .putString(StorageCipherImplementationAES23.APP_KEY_PREF, Base64.encodeToString(encrypted, Base64.DEFAULT)));
     }
 
     private static boolean hasAppKey(SharedPreferences prefs) {

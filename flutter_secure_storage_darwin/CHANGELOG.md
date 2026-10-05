@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.3+index.1
+
+- Merge upstream 0.4.3 lookup and compatibility fixes.
+- Omit result-request flags from `SecItemUpdate` matching queries to prevent -50.
+- Preserve existing items on lookup/update errors; add only on proven absence.
+- Add a production-engine query regression test and verify isolated physical iOS upserts.
+
 ## [0.4.3](https://github.com/juliansteenbakker/flutter_secure_storage/compare/flutter_secure_storage_darwin-v0.4.2...flutter_secure_storage_darwin-v0.4.3) (2026-09-16)
 
 

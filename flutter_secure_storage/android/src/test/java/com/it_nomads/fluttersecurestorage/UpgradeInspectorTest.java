@@ -79,10 +79,10 @@ public class UpgradeInspectorTest {
 
         Map<String, Object> status = inspect(true);
 
-        assertEquals(UpgradeInspector.STATE_LEGACY_DATA_UNREADABLE, status.get("state"));
+        assertEquals(UpgradeInspector.STATE_UNKNOWN, status.get("state"));
         assertEquals(UpgradeInspector.REASON_MISSING_ALGORITHM_MARKERS, status.get("reason"));
         assertEquals(1, status.get("entryCount"));
-        assertTrue((Boolean) status.get("willDiscardOnNextAccess"));
+        assertFalse((Boolean) status.get("willDiscardOnNextAccess"));
     }
 
     @Test
@@ -96,7 +96,7 @@ public class UpgradeInspectorTest {
 
         Map<String, Object> status = inspect(true);
 
-        assertEquals(UpgradeInspector.STATE_LEGACY_DATA_UNREADABLE, status.get("state"));
+        assertEquals(UpgradeInspector.STATE_UNKNOWN, status.get("state"));
         assertEquals(UpgradeInspector.REASON_LEGACY_BACKEND_PRESENT, status.get("reason"));
         assertEquals(2, status.get("entryCount"));
         // v11 doesn't delete the Tink store, so a downgrade can still migrate it.
@@ -122,7 +122,7 @@ public class UpgradeInspectorTest {
 
         Map<String, Object> status = inspect(false);
 
-        assertEquals(UpgradeInspector.STATE_LEGACY_DATA_UNREADABLE, status.get("state"));
+        assertEquals(UpgradeInspector.STATE_UNKNOWN, status.get("state"));
         assertFalse((Boolean) status.get("willDiscardOnNextAccess"));
     }
 
@@ -133,8 +133,8 @@ public class UpgradeInspectorTest {
 
         Map<String, Object> status = inspect(true);
 
-        assertEquals(UpgradeInspector.STATE_LEGACY_DATA_UNREADABLE, status.get("state"));
-        assertEquals(UpgradeInspector.REASON_REMOVED_CIPHER, status.get("reason"));
+        assertEquals(UpgradeInspector.STATE_UNKNOWN, status.get("state"));
+        assertEquals(UpgradeInspector.REASON_NONE, status.get("reason"));
         assertTrue(((String) status.get("details")).contains("RSA_ECB_PKCS1Padding"));
     }
 
@@ -145,8 +145,8 @@ public class UpgradeInspectorTest {
 
         Map<String, Object> status = inspect(true);
 
-        assertEquals(UpgradeInspector.STATE_LEGACY_DATA_UNREADABLE, status.get("state"));
-        assertEquals(UpgradeInspector.REASON_REMOVED_CIPHER, status.get("reason"));
+        assertEquals(UpgradeInspector.STATE_UNKNOWN, status.get("state"));
+        assertEquals(UpgradeInspector.REASON_NONE, status.get("reason"));
     }
 
     @Test
@@ -259,5 +259,25 @@ public class UpgradeInspectorTest {
         inspect(true);
 
         assertEquals("ciphertext", dataPrefs.getString(KEY_PREFIX + "_token", null));
+    }
+
+    @Test
+    public void pendingOwnedMigrationIsReportedWithoutAdvancingRecovery() {
+        storeEntry("token", "source ciphertext");
+        configSource.commit(configSource.edit().putString(MigrationArtifacts.MANIFEST, "opaque journal"));
+        Map<String, ?> before = new HashMap<>(configSource.getAll());
+
+        Map<String, Object> status = inspect(false);
+
+        assertEquals(UpgradeInspector.STATE_UNKNOWN, status.get("state"));
+        assertFalse((Boolean) status.get("willDiscardOnNextAccess"));
+        assertEquals(before, configSource.getAll());
+        assertEquals("source ciphertext", dataPrefs.getString(KEY_PREFIX + "_token", null));
+    }
+
+    @Test
+    public void aPrefixInsideAnotherPluginsKeyIsNotOwned() {
+        dataPrefs.edit().putString("other_" + KEY_PREFIX + "_token", "value").commit();
+        assertEquals(0, inspect(false).get("entryCount"));
     }
 }

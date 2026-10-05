@@ -19,7 +19,7 @@ dev_dependencies:
 
 melos:
   name: flutter_secure_storage
-  repository: https://github.com/mogol/flutter_secure_storage
+  repository: https://github.com/bulltechnologies/flutter_secure_storage
 
   command:
     version:

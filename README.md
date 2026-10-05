@@ -1,5 +1,12 @@
 # flutter_secure_storage
 
+[![Index Storage](https://github.com/bulltechnologies/flutter_secure_storage/actions/workflows/index-storage.yml/badge.svg)](https://github.com/bulltechnologies/flutter_secure_storage/actions/workflows/index-storage.yml)
+
+This is the public Index-maintained fork. Start with [INDEX_FORK.md](INDEX_FORK.md)
+for its upstream baseline, retained compatibility, immutable dependency pins,
+verification commands, and maintenance policy. The documentation below is
+retained from upstream.
+
 [![Pub Version](https://img.shields.io/pub/v/flutter_secure_storage.svg)](https://pub.dev/packages/flutter_secure_storage)
 [![Build Status](https://github.com/juliansteenbakker/flutter_secure_storage/actions/workflows/ci.yml/badge.svg)](https://github.com/juliansteenbakker/flutter_secure_storage/actions/workflows/ci.yml)
 [![Code Quality: Very Good Analysis](https://img.shields.io/badge/style-very_good_analysis-B22C89.svg)](https://pub.dev/packages/very_good_analysis)

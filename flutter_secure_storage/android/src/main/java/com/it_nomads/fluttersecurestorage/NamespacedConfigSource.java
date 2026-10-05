@@ -16,8 +16,10 @@ public class NamespacedConfigSource {
     
     private final SharedPreferences namespacedConfig;
     private final SharedPreferences legacyConfig;
+    private final String familyName;
     
     public NamespacedConfigSource(Context context, String sharedPreferencesName) {
+        this.familyName = sharedPreferencesName;
         String namespacedName = getNamespacedConfigPrefsName(sharedPreferencesName);
         this.namespacedConfig = context.getSharedPreferences(namespacedName, Context.MODE_PRIVATE);
         this.legacyConfig = context.getSharedPreferences(LEGACY_GLOBAL_CONFIG_NAME, Context.MODE_PRIVATE);
@@ -43,7 +45,7 @@ public class NamespacedConfigSource {
         if (value != null) {
             return value;
         }
-        return legacyConfig.getString(key, defaultValue);
+        return key.startsWith("__fss_") ? defaultValue : legacyConfig.getString(key, defaultValue);
     }
     
     /**
@@ -68,7 +70,8 @@ public class NamespacedConfigSource {
      * Checks if a key exists in either namespaced or legacy config.
      */
     public boolean contains(String key) {
-        return namespacedConfig.contains(key) || legacyConfig.contains(key);
+        return namespacedConfig.contains(key)
+                || (!key.startsWith("__fss_") && legacyConfig.contains(key));
     }
 
     /**
@@ -76,5 +79,12 @@ public class NamespacedConfigSource {
      */
     public Map<String, ?> getAll() {
         return namespacedConfig.getAll();
+    }
+
+    public SharedPreferences scopedPreferences() { return namespacedConfig; }
+    public String getFamilyName() { return familyName; }
+
+    public void commit(SharedPreferences.Editor editor) {
+        CheckedPreferences.commit(namespacedConfig, editor);
     }
 }

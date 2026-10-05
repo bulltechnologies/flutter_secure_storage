@@ -1,0 +1,96 @@
+name: Index Storage
+
+on:
+  push:
+    branches: [develop, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: index-storage-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  dart:
+    name: Dart API and compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - name: Analyze main package
+        working-directory: flutter_secure_storage
+        run: flutter analyze --no-pub
+      - name: Analyze platform interface
+        working-directory: flutter_secure_storage_platform_interface
+        run: flutter analyze --no-pub
+      - name: Analyze Darwin bridge
+        working-directory: flutter_secure_storage_darwin
+        run: flutter analyze --no-pub
+      - name: Check main package formatting
+        run: dart format --output=none --set-exit-if-changed flutter_secure_storage/lib flutter_secure_storage/test
+      - name: Test main package
+        working-directory: flutter_secure_storage
+        run: flutter test --no-pub --reporter expanded
+      - name: Test platform interface
+        working-directory: flutter_secure_storage_platform_interface
+        run: flutter test --no-pub --reporter expanded
+
+  android:
+    name: Android native and recovery
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '9.3.1'
+      - run: flutter precache --android
+      - name: Compile production plugin and run native unit tests
+        working-directory: flutter_secure_storage/tests/android
+        run: gradle :flutter_secure_storage:testDebugUnitTest --no-daemon --console=plain
+      - name: Obtain host-test JSON dependency
+        run: |
+          curl --fail --location --output "$RUNNER_TEMP/json.jar" https://repo.maven.apache.org/maven2/org/json/json/20240303/json-20240303.jar
+          printf '%s  %s\n' '3cf6cd6892e32e2b4c1c39e0f52f5248a2f5b37646fdfbb79a66b46b618414ed' "$RUNNER_TEMP/json.jar" | sha256sum --check
+      - name: Exercise persistence failure and repeated recovery
+        run: sh flutter_secure_storage/tests/host/run.sh "$RUNNER_TEMP/json.jar" "$RUNNER_TEMP/index-fss-host"
+
+  darwin:
+    name: Darwin update and preservation
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test mutation decision
+        run: |
+          swiftc flutter_secure_storage_darwin/darwin/flutter_secure_storage_darwin/Sources/flutter_secure_storage_darwin/KeychainUpsert.swift flutter_secure_storage_darwin/tests/keychain_upsert_test.swift -o "$RUNNER_TEMP/upsert-test"
+          "$RUNNER_TEMP/upsert-test"
+      - name: Test actual engine update query
+        run: |
+          swiftc flutter_secure_storage_darwin/darwin/flutter_secure_storage_darwin/Sources/flutter_secure_storage_darwin/FlutterSecureStorage.swift flutter_secure_storage_darwin/darwin/flutter_secure_storage_darwin/Sources/flutter_secure_storage_darwin/KeychainUpsert.swift flutter_secure_storage_darwin/tests/keychain_update_query_test.swift -o "$RUNNER_TEMP/query-test"
+          "$RUNNER_TEMP/query-test"
+      - name: Type check iOS storage engine
+        run: |
+          SDK_PATH="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun swiftc -typecheck -sdk "$SDK_PATH" -target arm64-apple-ios13.0 flutter_secure_storage_darwin/darwin/flutter_secure_storage_darwin/Sources/flutter_secure_storage_darwin/FlutterSecureStorage.swift flutter_secure_storage_darwin/darwin/flutter_secure_storage_darwin/Sources/flutter_secure_storage_darwin/KeychainUpsert.swift

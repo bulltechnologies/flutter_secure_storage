@@ -114,7 +114,12 @@ class KeyCipherImplementationRSAOAEP implements KeyCipher {
         Key privateKey = ks.getKey(keyAlias, null);
         Certificate cert = ks.getCertificate(keyAlias);
         if (privateKey == null || cert == null) {
+            if (!config.mayCreateKeys()) {
+                throw new IllegalStateException("Existing wrapping key is unavailable");
+            }
             createKeys(context);
+        } else if (!(privateKey instanceof PrivateKey)) {
+            throw new IllegalStateException("Existing wrapping alias has an incompatible key type");
         }
     }
 

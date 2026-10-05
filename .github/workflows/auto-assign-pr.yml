@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   assign-author:
+    if: github.repository == 'juliansteenbakker/flutter_secure_storage'
     runs-on: ubuntu-latest
     steps:
       - uses: toshimaru/auto-author-assign@v3.1.0

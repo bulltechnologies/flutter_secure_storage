@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 import android.util.Base64;
 
 import com.it_nomads.fluttersecurestorage.FlutterSecureStorageConfig;
+import com.it_nomads.fluttersecurestorage.CheckedPreferences;
 
 import java.security.Key;
 import java.security.SecureRandom;
@@ -22,12 +23,16 @@ public class StorageCipherImplementationAES23 implements StorageCipher {
     private static final String KEYSTORE_IV_NAME = "BVGhpcyBpcyB0aGUga2V5IGZvciBhIHNlY3VyZSBzdG9yYWdlIEFFUyBLZXkK";
     static final String APP_KEY_PREF = KEYSTORE_IV_NAME;
     private final String keyStoragePrefsName;
+    private final String rootSlot;
+    private final boolean mayCreate;
     private final Cipher cipher;
     private final SecureRandom secureRandom;
     private final Key secretKey;
 
     public StorageCipherImplementationAES23(Context context, KeyCipher ignoredKeyCipher, Cipher cipher, FlutterSecureStorageConfig config) throws Exception {
         keyStoragePrefsName = config.getEffectiveKeyStoragePrefsName();
+        rootSlot = config.rootSlot(KEYSTORE_IV_NAME);
+        mayCreate = config.mayCreateKeys();
         secureRandom = new SecureRandom();
         this.secretKey = loadOrGenerateApplicationKey(context, cipher);
         this.cipher = getCipher();
@@ -41,7 +46,7 @@ public class StorageCipherImplementationAES23 implements StorageCipher {
         final Cipher cipher = (biometricCipher != null) ? biometricCipher : getCipher();
         assert (cipher != null);
         SharedPreferences preferences = context.getSharedPreferences(keyStoragePrefsName, Context.MODE_PRIVATE);
-        String encryptedAppKeyBase64 = preferences.getString(KEYSTORE_IV_NAME, null);
+        String encryptedAppKeyBase64 = preferences.getString(rootSlot, null);
 
         if (encryptedAppKeyBase64 != null) {
             // Decrypt existing key - may throw BadPaddingException, IllegalBlockSizeException if algorithm changed
@@ -51,13 +56,14 @@ public class StorageCipherImplementationAES23 implements StorageCipher {
         }
 
         // No stored key - generate new one (first initialization)
+        if (!mayCreate) throw new IllegalStateException("Existing application key is unavailable");
         byte[] appKey = generateIV(keySize);
         SecretKey secretKey = new SecretKeySpec(appKey, KEY_ALGORITHM);
         byte[] newEncryptedAppKey = cipher.doFinal(appKey);
 
         SharedPreferences.Editor editor = preferences.edit();
-        editor.putString(KEYSTORE_IV_NAME, Base64.encodeToString(newEncryptedAppKey, Base64.DEFAULT));
-        editor.apply();
+        editor.putString(rootSlot, Base64.encodeToString(newEncryptedAppKey, Base64.DEFAULT));
+        CheckedPreferences.commit(preferences, editor);
 
         return secretKey;
     }
@@ -65,7 +71,7 @@ public class StorageCipherImplementationAES23 implements StorageCipher {
     @Override
     public void deleteKey(Context context) {
         SharedPreferences preferences = context.getSharedPreferences(keyStoragePrefsName, Context.MODE_PRIVATE);
-        preferences.edit().remove(KEYSTORE_IV_NAME).apply();
+        CheckedPreferences.commit(preferences, preferences.edit().remove(rootSlot));
     }
 
     protected Cipher getCipher() throws Exception {

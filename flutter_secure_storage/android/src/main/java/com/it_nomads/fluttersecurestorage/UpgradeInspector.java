@@ -70,7 +70,7 @@ public final class UpgradeInspector {
 
         String discardedReason = configSource.getString(DISCARDED_MARKER_KEY, null);
         if (discardedReason != null) {
-            configSource.edit().remove(DISCARDED_MARKER_KEY).apply();
+            configSource.commit(configSource.edit().remove(DISCARDED_MARKER_KEY));
             return status(STATE_LEGACY_DATA_DISCARDED, discardedReason, 0, false,
                     "Unreadable data was deleted by an earlier storage access.");
         }
@@ -85,7 +85,7 @@ public final class UpgradeInspector {
         String sampleValue = null;
         for (Map.Entry<String, ?> entry : dataPrefs.getAll().entrySet()) {
             String key = entry.getKey();
-            if (!(entry.getValue() instanceof String) || !key.contains(keyPrefix) || key.endsWith(BACKUP_SUFFIX)) {
+            if (!(entry.getValue() instanceof String) || !key.startsWith(keyPrefix + "_") || key.endsWith(BACKUP_SUFFIX)) {
                 continue;
             }
             entryCount++;
@@ -94,15 +94,25 @@ public final class UpgradeInspector {
             }
         }
 
+        if (configSource.contains(MigrationArtifacts.MANIFEST)) {
+            return status(STATE_UNKNOWN, REASON_NONE, entryCount, false,
+                    "Authenticated migration recovery is pending; inspection does not advance it.");
+        }
+
+        String generation = configSource.getString(MigrationArtifacts.ACTIVE_GENERATION, null);
+        if (generation != null && !MigrationArtifacts.isGeneration(generation)) {
+            return status(STATE_UNKNOWN, REASON_NONE, entryCount, false,
+                    "Unrecognised root authority; all storage artifacts are preserved.");
+        }
+        config = config.forRootGeneration(generation, false);
+
         if (entryCount == 0) {
             int tinkEntries = countEncryptedSharedPreferencesEntries(dataPrefs);
             if (tinkEntries > 0) {
-                // v11 can't read the Tink store, but it also doesn't delete it,
-                // so a downgrade to v10 can still migrate the data.
-                return status(STATE_LEGACY_DATA_UNREADABLE, REASON_LEGACY_BACKEND_PRESENT,
+                return status(STATE_UNKNOWN, REASON_LEGACY_BACKEND_PRESENT,
                         tinkEntries, false,
-                        "Data is in the EncryptedSharedPreferences (Tink) store, whose backend "
-                                + "v11 removed. Upgrading to v10 before v11 would have migrated it.");
+                        "Legacy EncryptedSharedPreferences data is retained. Its compatibility "
+                                + "backend requires explicit host recovery or retirement.");
             }
             return status(STATE_OK, REASON_NONE, 0, false, "No stored data.");
         }
@@ -111,16 +121,16 @@ public final class UpgradeInspector {
         String savedStorageAlgorithm = StorageCipherFactory.readSavedStorageAlgorithm(configSource);
 
         if (savedKeyAlgorithm == null || savedStorageAlgorithm == null) {
-            return unreadable(config, REASON_MISSING_ALGORITHM_MARKERS, entryCount,
-                    "Data carries no algorithm markers, so it was written by v9 or earlier. "
-                            + "Upgrading to v10 before v11 would have migrated it.");
+            return status(STATE_UNKNOWN, REASON_MISSING_ALGORITHM_MARKERS, entryCount, false,
+                    "Legacy data has no algorithm markers. The fork retains its readers, "
+                            + "but inspection does not migrate or create key material.");
         }
 
-        if (KeyCipherAlgorithm.isRemoved(savedKeyAlgorithm)
-                || StorageCipherAlgorithm.isRemoved(savedStorageAlgorithm)) {
-            return unreadable(config, REASON_REMOVED_CIPHER, entryCount,
-                    "Data was encrypted with " + savedKeyAlgorithm + "/" + savedStorageAlgorithm
-                            + ", removed in v11. Upgrading to v10 before v11 would have migrated it.");
+        if ("RSA_ECB_PKCS1Padding".equals(savedKeyAlgorithm)
+                || "AES_CBC_PKCS7Padding".equals(savedStorageAlgorithm)) {
+            return status(STATE_UNKNOWN, REASON_NONE, entryCount, false,
+                    "Legacy " + savedKeyAlgorithm + "/" + savedStorageAlgorithm
+                            + " readers are retained. Recovery is performed during initialization.");
         }
 
         KeyCipherAlgorithm keyAlgorithm;
@@ -144,18 +154,18 @@ public final class UpgradeInspector {
                 Context.MODE_PRIVATE
         );
 
-        if (!hasRsaKeyStoreEntry(context, config) || keyPrefs.getString(GCM_WRAPPED_KEY, null) == null) {
+        if (!hasRsaKeyStoreEntry(context, config) || keyPrefs.getString(config.rootSlot(GCM_WRAPPED_KEY), null) == null) {
             // The key may just be at the pre-switch location; check before reporting loss.
             FlutterSecureStorageConfig altConfig = alternateNamespaceConfig(config);
             SharedPreferences altKeyPrefs = context.getSharedPreferences(
                     altConfig.getEffectiveKeyStoragePrefsName(), Context.MODE_PRIVATE);
-            boolean pendingNamespaceRecovery = hasRsaKeyStoreEntry(context, altConfig)
+            boolean pendingNamespaceRecovery = generation == null && hasRsaKeyStoreEntry(context, altConfig)
                     && altKeyPrefs.getString(GCM_WRAPPED_KEY, null) != null;
             if (!pendingNamespaceRecovery) {
                 return unreadable(config, REASON_MISSING_KEY_MATERIAL, entryCount,
                         "Stored data is orphaned: the key needed to decrypt it is gone.");
             }
-            return status(STATE_OK, REASON_PENDING_NAMESPACE_RECOVERY, entryCount, false,
+            return status(STATE_UNKNOWN, REASON_PENDING_NAMESPACE_RECOVERY, entryCount, false,
                     "Key material is at the pre-namespace-switch location; the next "
                             + "initialize() call will relocate it automatically.");
         }

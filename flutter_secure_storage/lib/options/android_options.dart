@@ -5,6 +5,9 @@ part of '../flutter_secure_storage.dart';
 
 /// Algorithm used to encrypt/wrap the secret key in Android KeyStore.
 enum KeyCipherAlgorithm {
+  /// Legacy reader retained by the Index fork for existing storage migration.
+  RSA_ECB_PKCS1Padding,
+
   /// RSA/ECB/OAEPWithSHA-256AndMGF1Padding (default, API 23+).
   RSA_ECB_OAEPwithSHA_256andMGF1Padding,
 
@@ -14,6 +17,9 @@ enum KeyCipherAlgorithm {
 
 /// Algorithm used to encrypt stored data.
 enum StorageCipherAlgorithm {
+  /// Legacy reader retained by the Index fork for existing storage migration.
+  AES_CBC_PKCS7Padding,
+
   /// AES/GCM/NoPadding (default, API 23+).
   AES_GCM_NoPadding,
 }
@@ -48,6 +54,7 @@ class AndroidOptions extends Options {
   /// - AES_GCM_NoPadding storage + AES_GCM_NoPadding key
   ///   (KeyStore-based, supports biometrics)
   const AndroidOptions({
+    bool encryptedSharedPreferences = false,
     bool resetOnError = true,
     bool migrateOnAlgorithmChange = true,
     bool migrateWithBackup = false,
@@ -60,12 +67,14 @@ class AndroidOptions extends Options {
     AndroidBiometricType biometricType =
         AndroidBiometricType.biometricOrDeviceCredential,
     bool requireBiometricConfirmation = true,
+    this.sharedPreferencesName,
     this.preferencesKeyPrefix,
     this.storageNamespace,
     this.biometricPromptTitle,
     this.biometricPromptSubtitle,
     this.biometricPromptNegativeButton,
-  }) : _resetOnError = resetOnError,
+  }) : _encryptedSharedPreferences = encryptedSharedPreferences,
+       _resetOnError = resetOnError,
        _migrateOnAlgorithmChange = migrateOnAlgorithmChange,
        _migrateWithBackup = migrateWithBackup,
        _enforceBiometrics = enforceBiometrics,
@@ -84,6 +93,7 @@ class AndroidOptions extends Options {
   /// - When enforceBiometrics=false, gracefully degrades if biometrics
   ///   unavailable
   const AndroidOptions.biometric({
+    bool encryptedSharedPreferences = false,
     bool resetOnError = true,
     bool migrateOnAlgorithmChange = true,
     bool migrateWithBackup = false,
@@ -92,12 +102,14 @@ class AndroidOptions extends Options {
     AndroidBiometricType biometricType =
         AndroidBiometricType.biometricOrDeviceCredential,
     bool requireBiometricConfirmation = true,
+    this.sharedPreferencesName,
     this.preferencesKeyPrefix,
     this.storageNamespace,
     this.biometricPromptTitle,
     this.biometricPromptSubtitle,
     this.biometricPromptNegativeButton,
-  }) : _resetOnError = resetOnError,
+  }) : _encryptedSharedPreferences = encryptedSharedPreferences,
+       _resetOnError = resetOnError,
        _migrateOnAlgorithmChange = migrateOnAlgorithmChange,
        _migrateWithBackup = migrateWithBackup,
        _enforceBiometrics = enforceBiometrics,
@@ -106,6 +118,14 @@ class AndroidOptions extends Options {
        _storageCipherAlgorithm = StorageCipherAlgorithm.AES_GCM_NoPadding,
        _biometricType = biometricType,
        _requireBiometricConfirmation = requireBiometricConfirmation;
+
+  /// Legacy backend selection retained for recovery and retirement of existing
+  /// stores. New stores should use the default custom cipher backend.
+  final bool _encryptedSharedPreferences;
+
+  /// Legacy data-file name retained for existing store identities. Use
+  /// [storageNamespace] for new stores, which also isolates their keys.
+  final String? sharedPreferencesName;
 
   /// When an error is detected, automatically reset all data. This will prevent
   /// fatal errors regarding an unknown key however keep in mind that it will
@@ -230,6 +250,8 @@ class AndroidOptions extends Options {
 
   @override
   Map<String, String> toMap() => <String, String>{
+    if (_encryptedSharedPreferences) 'encryptedSharedPreferences': 'true',
+    'sharedPreferencesName': ?sharedPreferencesName,
     'resetOnError': '$_resetOnError',
     'migrateOnAlgorithmChange': '$_migrateOnAlgorithmChange',
     'migrateWithBackup': '$_migrateWithBackup',
@@ -249,6 +271,8 @@ class AndroidOptions extends Options {
 
   /// Creates a copy of this AndroidOptions with the given fields replaced.
   AndroidOptions copyWith({
+    bool? encryptedSharedPreferences,
+    String? sharedPreferencesName,
     bool? resetOnError,
     bool? migrateOnAlgorithmChange,
     bool? migrateWithBackup,
@@ -264,6 +288,9 @@ class AndroidOptions extends Options {
     String? biometricPromptSubtitle,
     String? biometricPromptNegativeButton,
   }) => AndroidOptions(
+    encryptedSharedPreferences:
+        encryptedSharedPreferences ?? _encryptedSharedPreferences,
+    sharedPreferencesName: sharedPreferencesName ?? this.sharedPreferencesName,
     resetOnError: resetOnError ?? _resetOnError,
     migrateOnAlgorithmChange:
         migrateOnAlgorithmChange ?? _migrateOnAlgorithmChange,
