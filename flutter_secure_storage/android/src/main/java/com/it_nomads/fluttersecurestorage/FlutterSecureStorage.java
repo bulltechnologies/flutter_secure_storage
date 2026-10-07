@@ -291,6 +291,8 @@ public class FlutterSecureStorage {
                 synchronized (MigrationArtifacts.familyLock(operationFamily)) {
                     if (operationEpoch != MigrationArtifacts.familyEpoch(operationFamily)) {
                         callback.onError(new IllegalStateException("Storage family changed before operation"));
+                    } else if (cipher != null && config.getRequireBiometricsPerOperation()) {
+                        completeCipherInitialization(new NamespacedConfigSource(context, operationFamily), callback, cipher);
                     } else callback.onSuccess(cipher);
                 }
             }
@@ -446,8 +448,22 @@ public class FlutterSecureStorage {
             return;
         }
         boolean hasData = hasAnyEncryptedData(nonEncryptedPreferences);
+        boolean hasEspKeysets = nonEncryptedPreferences.contains("__androidx_security_crypto_encrypted_prefs_key_keyset__")
+                || nonEncryptedPreferences.contains("__androidx_security_crypto_encrypted_prefs_value_keyset__");
+        // Opening ESP is not a read-only probe: it creates missing keysets. A
+        // custom-cipher caller must preserve an unidentified legacy source.
+        // Older probes also left empty ESP keysets beside valid custom records;
+        // those records remain usable when no opaque ESP payload is present.
+        if (!config.isUseEncryptedSharedPreferences() && !config.shouldMigrateOnAlgorithmChange()
+                && !configSource.contains(MigrationArtifacts.MANIFEST)
+                && hasOpaqueEspEntries(nonEncryptedPreferences)) {
+            callback.onError(new IllegalStateException("EncryptedSharedPreferences source requires preserved recovery"));
+            return;
+        }
         this.config = config.forRootGeneration(activeGeneration,
-                activeGeneration == null && !hasData && !configSource.contains(MigrationArtifacts.MANIFEST));
+                activeGeneration == null && !hasData
+                    && (!hasEspKeysets || config.shouldMigrateOnAlgorithmChange())
+                    && !configSource.contains(MigrationArtifacts.MANIFEST));
 
         // Move the wrapped key if the app switched between sharedPreferencesName
         // and storageNamespace.
@@ -459,7 +475,9 @@ public class FlutterSecureStorage {
 
         // Skip old ESP migration if migrateWithBackup is enabled - ESP migration is now
         // handled by step 6 of the backup-protected migration path
-        if (!isAlreadyMigrated && !config.shouldMigrateWithBackup()) {
+        if (!isAlreadyMigrated && !config.shouldMigrateWithBackup()
+                && (config.isUseEncryptedSharedPreferences()
+                    || (hasEspKeysets && config.shouldMigrateOnAlgorithmChange()))) {
             try {
                 SharedPreferences encryptedPreferences = initializeEncryptedSharedPreferencesManager(context);
 
@@ -641,14 +659,7 @@ public class FlutterSecureStorage {
                 return;
             }
 
-            if (storageCipherFactory.requiresReEncryption()) {
-                if (canSkipMarkerlessMigration()) {
-                    // No markers, and nothing to migrate (fresh install, or the
-                    // data already reads with the current cipher). Use it as is.
-                    storageCipher = storageCipherFactory.getCurrentStorageCipher(context, null);
-                    callback.onSuccess(null);
-                    return;
-                }
+            if (storageCipherFactory.requiresReEncryption() && !canSkipMarkerlessMigration()) {
                 Log.w(TAG, "Algorithm changed detected.");
                 handleKeyMismatch(configSource, callback, null, "Algorithm changed detected");
                 return;
@@ -670,7 +681,7 @@ public class FlutterSecureStorage {
                 // For AES_GCM_NoPadding_BIOMETRIC, cipher is already initialized from KeyStore
                 // with setUserAuthenticationRequired(false) when device has no security
                 storageCipher = storageCipherFactory.getCurrentStorageCipher(context, cipher);
-                callback.onSuccess(null);
+                completeCipherInitialization(configSource, callback);
                 return;
             }
 
@@ -688,7 +699,7 @@ public class FlutterSecureStorage {
                     try {
                         storageCipher = storageCipherFactory.getCurrentStorageCipher(context, result.getCryptoObject().getCipher());
                         Log.d(TAG, "Biometric authentication succeeded");
-                        callback.onSuccess(null);
+                        completeCipherInitialization(configSource, callback);
                     } catch (Throwable e) {
                         if (e instanceof VirtualMachineError) {
                             throw (VirtualMachineError) e;
@@ -727,19 +738,60 @@ public class FlutterSecureStorage {
         }
     }
 
+    private void completeCipherInitialization(NamespacedConfigSource configSource,
+                                               SecurePreferencesCallback<Void> callback) {
+        completeCipherInitialization(configSource, callback, null);
+    }
+
+    private <T> void completeCipherInitialization(NamespacedConfigSource configSource,
+                                                 SecurePreferencesCallback<T> callback, T value) {
+        // Missing markers are only a guess until the selected cipher opens.
+        // A refused attempt must not relabel the source for the next attempt.
+        try {
+            if (storageCipherFactory.assumedSavedAlgorithms()) {
+                String keyMarker = StorageCipherFactory.readSavedKeyAlgorithm(configSource);
+                String dataMarker = StorageCipherFactory.readSavedStorageAlgorithm(configSource);
+                if ((keyMarker != null && !keyMarker.equals(storageCipherFactory.getCurrentKeyAlgorithm().name()))
+                        || (dataMarker != null && !dataMarker.equals(storageCipherFactory.getCurrentStorageAlgorithm().name()))) {
+                    throw new IllegalStateException("Algorithm markers conflict with the opened cipher");
+                }
+                if (keyMarker == null || dataMarker == null) {
+                    SharedPreferences.Editor editor = configSource.edit();
+                    storageCipherFactory.storeCurrentAlgorithms(editor);
+                    configSource.commit(editor);
+                }
+            }
+        } catch (Exception error) {
+            callback.onError(error);
+            return;
+        }
+        callback.onSuccess(value);
+    }
+
+    private boolean hasOpaqueEspEntries(SharedPreferences dataPrefs) {
+        for (String key : dataPrefs.getAll().keySet()) {
+            if (!key.startsWith(config.getSharedPreferencesKeyPrefix() + "_")
+                    && !key.equals("__androidx_security_crypto_encrypted_prefs_key_keyset__")
+                    && !key.equals("__androidx_security_crypto_encrypted_prefs_value_keyset__")
+                    && !key.equals("__fss_checked_commit_v1__")
+                    && !key.equals("__index_checked_commit_v1__")
+                    && !key.equals("FlutterSecureSAlgorithmKey")
+                    && !key.equals("FlutterSecureSAlgorithmStorage")) return true;
+        }
+        return false;
+    }
+
     /**
      * Whether a "changed algorithm" seen only because there are no markers can
-     * be resolved without migrating: RSA key cipher, and either nothing stored
-     * or the data already reads with the current cipher. Read-only.
+     * be resolved without migrating: nothing stored, or existing data already
+     * reads with the current non-biometric cipher. Authentication still runs
+     * through the normal initialization path for an empty biometric family.
      */
     private boolean canSkipMarkerlessMigration() {
         if (!storageCipherFactory.assumedSavedAlgorithms()) {
             return false;
         }
         try {
-            if (storageCipherFactory.getCurrentKeyCipher(context).getCipher(context) != null) {
-                return false; // biometric key, can't decrypt without a prompt
-            }
             SharedPreferences dataPrefs = context.getSharedPreferences(
                     config.getEffectiveDataPrefsName(),
                     Context.MODE_PRIVATE
@@ -756,6 +808,9 @@ public class FlutterSecureStorage {
                 if (dataPrefs.contains("__androidx_security_crypto_encrypted_prefs_key_keyset__")
                         || dataPrefs.contains("__androidx_security_crypto_encrypted_prefs_value_keyset__")) return false;
                 return true; // fresh install: nothing to migrate
+            }
+            if (storageCipherFactory.getCurrentKeyCipher(context).getCipher(context) != null) {
+                return false; // existing biometric data can't be probed without a prompt
             }
             return storageCipherFactory.currentCipherDecrypts(context, Base64.decode(sample, 0));
         } catch (Throwable t) {
@@ -795,9 +850,7 @@ public class FlutterSecureStorage {
         Log.i(TAG, "Starting data migration from saved to current cipher algorithms...");
 
         try {
-            // "Biometric" is a property of the key cipher, not the storage cipher, so read the
-            // key algorithms off the factory's resolved fields rather than a fresh configSource
-            // read, which would see the CURRENT markers the factory just wrote there.
+            // "Biometric" is a property of the key cipher, not the storage cipher.
             KeyCipherAlgorithm savedKeyAlg = storageCipherFactory.getSavedKeyAlgorithm();
             KeyCipherAlgorithm currentKeyAlg = storageCipherFactory.getCurrentKeyAlgorithm();
 

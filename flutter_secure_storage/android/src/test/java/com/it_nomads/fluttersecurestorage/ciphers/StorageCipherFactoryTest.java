@@ -74,11 +74,11 @@ public class StorageCipherFactoryTest {
     }
 
     @Test
-    public void noSavedMarkers_writesCurrentAlgorithmsToPrefs() {
+    public void noSavedMarkers_constructionDoesNotRelabelStorage() {
         factory("RSA_ECB_OAEPwithSHA_256andMGF1Padding", "AES_GCM_NoPadding");
 
-        assertEquals("RSA_ECB_OAEPwithSHA_256andMGF1Padding", namespacedPrefs.getString(PREF_KEY_ALGORITHM, null));
-        assertEquals("AES_GCM_NoPadding",                     namespacedPrefs.getString(PREF_STORAGE_ALGORITHM, null));
+        assertNull(namespacedPrefs.getString(PREF_KEY_ALGORITHM, null));
+        assertNull(namespacedPrefs.getString(PREF_STORAGE_ALGORITHM, null));
     }
 
     @Test
